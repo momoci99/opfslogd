@@ -76,6 +76,7 @@ When the size limit is hit, `done` segments are deleted first, then the oldest `
 - Web Locks give one uploader across tabs, and hand over automatically when that tab closes. This was the main reason the earlier design used a SharedWorker.
 - Functions cannot be passed to a worker, so `send()` runs on the main thread of the lock holder. Upload is not on the hot path, so this cost is fine.
 - Delivery is at-least-once. `meta` carries `segmentId` (idempotency key), `sha256`, `size`, and time range so the backend can dedupe and verify.
+- `file` is the segment converted to plain JSON Lines, not the internal segment bytes (see #010). `sha256` and `size` refer to that converted file.
 
 ## 008. Design documents are HTML; decision records stay Markdown (2026-10-29)
 
@@ -101,3 +102,51 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 - Data URLs run with an opaque origin and have no OPFS access.
 
 **Known issue to verify:** Vite dev mode pre-bundles dependencies, which may break the worker URL. Users may need `optimizeDeps.exclude: ['opfslogd']`.
+
+## 010. Segment files are binary frames with JSON Lines payloads (2026-10-29)
+
+**Decision:** A segment file is a small file header followed by frames. One flush is one frame. Each frame has a fixed-size binary header (magic, payload length, CRC32, record count, min/max timestamp, seq range, level bitmask) and a payload of UTF-8 JSON Lines. There is no per-record binary header. This format is internal: export and upload convert segments to plain JSON Lines.
+
+**Why:**
+- The bytes the main thread sends to the worker are appended to the file as is, so encoding happens once, on the main thread, at flush time. The format is therefore chosen for the cheapest main-thread encoding.
+- Native `JSON.stringify` + `TextEncoder.encodeInto` handles arbitrary user objects fast with zero dependencies. A full binary format (MessagePack etc.) would need a JS encoder or a runtime dependency, and only saves about 20-30% in size.
+- Plain JSON Lines cannot detect corruption that still parses, and queries must parse every line. Frame headers add CRC32 corruption checks, crash recovery by truncating at the first bad frame, and frame-level skipping for time-range and level queries.
+- Keeping the format internal means backends never depend on it, so it can change across `0.x` versions.
+
+**To verify:** native `JSON.stringify` vs JS binary encoders (e.g. msgpackr) on arbitrary objects; CRC32 throughput on mobile. Details: `docs/design/storage-format.html`.
+
+## 011. Record schema: `ts`, `lv`, `msg`, `ctx`, `err`; per-tab values live in headers (2026-10-29)
+
+**Decision:** Each stored JSONL record has `ts`, `lv`, `msg`, and optional `ctx` (user data) and `err` (`name`, `message`, `stack`). Tab ID and global context are stored once in the file header. `seq` is derived from the frame header's starting seq plus the line index. Export and upload add these values back to every line.
+
+**Why:**
+- `ctx` keeps user keys from colliding with reserved fields.
+- `JSON.stringify(new Error())` returns `{}`, so errors need explicit fields.
+- Tab ID, seq, and global context would repeat on every record. Storing them once saves tens of bytes per record, which is hundreds of KB per second at the target rate.
+- `ts` is `Date.now()` in integer milliseconds (wall clock), not `performance.timeOrigin + performance.now()` (monotonic). Logs are matched against server logs and human memory, so wall-clock time matters more. The wall clock can jump backwards, so order within a tab comes from `seq`, not `ts`.
+- `log()` must never throw. If `ctx` cannot be serialized (circular reference, `BigInt`), it is replaced with `{"_unserializable": "<reason>"}` and the record is still written.
+
+## 012. Segment file names carry the time range and tab ID (2026-10-29)
+
+**Decision:** An active segment is named `{startTs}_{tabId}.seg`. When sealed, it is renamed to `{startTs}_{endTs}_{tabId}.seg` as part of the same `move()` that changes its state directory. Timestamps are zero-padded to 13 digits. The format version is not in the name; it is in the file header.
+
+**Why:**
+- Queries and retention can pick files by name without opening them.
+- Zero-padding makes lexical order equal time order.
+- Sealing already moves the file, so the rename is free.
+- Each worker holds the Web Lock `opfslogd:tab:{tabId}` while alive. Files in `active/` whose lock is gone (checked with `navigator.locks.query()`) belong to a crashed tab; the retention holder recovers and seals them.
+
+## 013. Format versioning: reader/writer versions, extensible headers, fixed file names (2026-10-29)
+
+**Decision:**
+- The segment file-name scheme (#012) never changes.
+- The file header has `formatVersion` (written by) and `minReaderVersion` (needed to read). A library can read a file when `minReaderVersion` is not above its own version.
+- The frame header has `headerLength`, so fields can be appended to the header, and a 16-bit `flags` field, 0 for now, for incompatible features such as compression.
+- Writers always write the latest format. Readers support every older format, even in `0.x`.
+- When a library meets a file it cannot read: query and export skip it and report the skip; retention still deletes it by name; upload leaves it in `pending` for a newer tab; crash recovery does not touch it.
+
+**Why:**
+- Tabs can run different library versions against the same directory.
+- Unread `pending` logs on user devices must survive upgrades.
+- Patterns borrowed: SQLite's separate read/write versions, Protobuf's ignore-unknown-fields (here `headerLength` and extra JSON keys), Kafka's per-batch attribute flags. Most changes become compatible and need no version bump.
+- IndexedDB-style `versionchange` notification is not needed: old tabs only skip what they cannot read.

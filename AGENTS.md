@@ -32,7 +32,7 @@ CI (`.github/workflows/ci.yml`) runs the same steps on every push and PR.
 src/                 library source; tests next to code as *.test.ts
 src/index.ts         public entry; everything exported here is public API
 docs/decisions.md    design decision records (Markdown)
-docs/design/         design documents (HTML, open in a browser)
+docs/design/         design documents (HTML, open in a browser; shared style.css)
 docs/RELEASING.md    release process (human-only)
 tsdown.config.ts     build entries and options
 vitest.config.ts     test environment
