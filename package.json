@@ -1,0 +1,55 @@
+{
+  "name": "opfslogd",
+  "version": "0.0.0",
+  "description": "Browser logging library built on OPFS and SharedWorker",
+  "keywords": [
+    "opfs",
+    "shared-worker",
+    "logging",
+    "logger",
+    "browser"
+  ],
+  "license": "MIT",
+  "author": "momoci99",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/momoci99/opfslogd.git"
+  },
+  "homepage": "https://github.com/momoci99/opfslogd#readme",
+  "bugs": {
+    "url": "https://github.com/momoci99/opfslogd/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint:pkg": "publint",
+    "prepublishOnly": "pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "packageManager": "pnpm@9.13.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "jsdom": "^30.1.3",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
