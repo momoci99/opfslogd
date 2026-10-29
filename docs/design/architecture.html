@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opfslogd 아키텍처</title>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --surface: #ffffff;
+    --text: #1d1d1f;
+    --muted: #5f6368;
+    --border: #e3e1dc;
+    --accent: #2f5fd0;
+    --accent-soft: #e8eefb;
+    --ok: #1e7a46;
+    --ok-soft: #e4f3ea;
+    --warn: #9a5b00;
+    --warn-soft: #fbf0dc;
+    --bad: #b3261e;
+    --bad-soft: #fbe5e3;
+    --code-bg: #f2f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416;
+      --surface: #1c1c1f;
+      --text: #ececee;
+      --muted: #a1a1a8;
+      --border: #2e2e33;
+      --accent: #8aaaf5;
+      --accent-soft: #1f2840;
+      --ok: #6fcf97;
+      --ok-soft: #17301f;
+      --warn: #f0b860;
+      --warn-soft: #33270f;
+      --bad: #f28b82;
+      --bad-soft: #3a1a18;
+      --code-bg: #232327;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141416;
+    --surface: #1c1c1f;
+    --text: #ececee;
+    --muted: #a1a1a8;
+    --border: #2e2e33;
+    --accent: #8aaaf5;
+    --accent-soft: #1f2840;
+    --ok: #6fcf97;
+    --ok-soft: #17301f;
+    --warn: #f0b860;
+    --warn-soft: #33270f;
+    --bad: #f28b82;
+    --bad-soft: #3a1a18;
+    --code-bg: #232327;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 16px 96px; }
+  h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.35rem; margin: 56px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+  h3 { font-size: 1.05rem; margin: 28px 0 8px; }
+  p, li { color: var(--text); }
+  .meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 24px; }
+  .lead { font-size: 1.1rem; }
+  a { color: var(--accent); }
+  code { font: 0.88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+
+  nav.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px; }
+  nav.toc ol { margin: 0; padding-left: 20px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.94rem; background: var(--surface); }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+
+  .tag { display: inline-block; font-size: 0.78rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .tag.ok { color: var(--ok); background: var(--ok-soft); }
+  .tag.bad { color: var(--bad); background: var(--bad-soft); }
+  .tag.warn { color: var(--warn); background: var(--warn-soft); }
+
+  figure { margin: 20px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+  svg text { font-family: inherit; fill: var(--text); }
+  svg .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+  svg .box.main { fill: var(--accent-soft); stroke: var(--accent); }
+  svg .box.ok { fill: var(--ok-soft); stroke: var(--ok); }
+  svg .box.warn { fill: var(--warn-soft); stroke: var(--warn); }
+  svg .line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+  svg .line.dash { stroke-dasharray: 5 4; }
+  svg .small { font-size: 12px; fill: var(--muted); }
+  svg .label { font-size: 14px; font-weight: 600; }
+  svg .arrowhead { fill: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>opfslogd 아키텍처</h1>
+<p class="meta">상태: 설계 중 · 최종 수정 2026-10-29 · 관련 결정: <code>docs/decisions.md</code> #006, #007, #008, #009</p>
+
+<p class="lead">각 탭이 자기 전용 Dedicated Worker로 자기 OPFS 파일에 로그를 씁니다. 탭끼리 로그를 주고받지 않으며, 여러 탭 중 하나만 해야 하는 일(보존 정리, 업로드)은 Web Locks로 조율합니다. SharedWorker는 사용하지 않습니다.</p>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#requirements">요구사항</a></li>
+    <li><a href="#targets">성능 목표</a></li>
+    <li><a href="#options">검토한 구조</a></li>
+    <li><a href="#architecture">선택한 구조</a></li>
+    <li><a href="#lifecycle">세그먼트 생명주기</a></li>
+    <li><a href="#upload">업로드</a></li>
+    <li><a href="#retention">보존 정책</a></li>
+    <li><a href="#scope">범위 밖</a></li>
+    <li><a href="#verify">검증할 것</a></li>
+    <li><a href="#next">다음 단계</a></li>
+  </ol>
+</nav>
+
+<h2 id="requirements">1. 요구사항</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>항목</th><th>결정</th></tr>
+  <tr><td>대상 브라우저</td><td>최신 2버전 데스크톱 + 모바일 (Chrome, Edge, Firefox, Safari, Android Chrome, iOS Safari)</td></tr>
+  <tr><td>로그량</td><td>매우 높음. 초당 수천 건 이상</td></tr>
+  <tr><td>꺼내 쓰기</td><td>파일 내보내기, 쿼리 API, 서버 업로드, 같은 탭 안 실시간 구독</td></tr>
+  <tr><td>보존</td><td>설정으로 조정. 기본값은 용량 상한 + 기간 상한</td></tr>
+</table>
+</div>
+
+<h3>라이브러리라서 생기는 요구사항</h3>
+<ul>
+  <li><strong>import만으로 부작용 없음.</strong> SSR에서 import해도 동작해야 합니다. Worker는 <code>init()</code>을 호출할 때 시작합니다.</li>
+  <li><strong>버전 공존.</strong> 탭마다 라이브러리 버전이 다를 수 있습니다. 파일 포맷과 Lock 이름에 버전을 넣습니다.</li>
+  <li><strong>번들러 호환.</strong> <code>new URL('./worker.js', import.meta.url)</code> 패턴을 Vite, webpack, Rollup, esbuild에서 확인해야 합니다.</li>
+  <li><strong>Worker 배포.</strong> Worker는 별도 파일(<code>dist/worker.js</code>)로 배포하고 <code>new URL('./worker.js', import.meta.url)</code>로 불러옵니다. 번들러가 이 파일을 내보내지 못하거나(Rollup, esbuild) 라이브러리를 CDN에서 불러오는 경우, 사용자가 파일을 자기 origin에 두고 <code>init({ workerUrl })</code>로 경로를 넘깁니다. 인라인 빌드는 보류합니다(결정 #009).</li>
+  <li><strong>앱을 깨뜨리지 않음.</strong> 지원하지 않는 환경, 용량 부족, 오류가 생기면 조용히 축소 동작하고, 오류는 콜백으로만 알립니다.</li>
+  <li><strong>네임스페이스.</strong> 같은 origin 안의 여러 앱이나 인스턴스는 디렉터리로 분리합니다.</li>
+</ul>
+
+<h2 id="targets">2. 성능 목표</h2>
+<p>첫 기준값입니다. 벤치마크로 측정하면서 점진적으로 조정합니다.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>항목</th><th>목표</th></tr>
+  <tr><td>지속 처리량</td><td>origin 전체 초당 10,000건 (데스크톱)</td></tr>
+  <tr><td>순간 폭주</td><td>1초에 100,000건이 들어와도 크래시 없음. 버리는 것은 허용하되 버린 건수를 기록</td></tr>
+  <tr><td><code>log()</code> 비용</td><td>메인 스레드를 막지 않고 예외도 던지지 않음. 평균 수 µs 이하</td></tr>
+  <tr><td>메모리</td><td>탭당 버퍼 상한(예: 4MB). 넘치면 정해진 정책대로 버림</td></tr>
+  <tr><td>유실 구간</td><td>크래시 시 최대 flush 주기(예: 200ms)만큼. 페이지를 닫을 때(<code>pagehide</code>)는 가능한 한 flush</td></tr>
+  <tr><td>과부하 시 버리는 순서</td><td><code>debug</code>부터 버리고 <code>error</code>는 끝까지 보존. 버린 건수는 별도 레코드로 남김</td></tr>
+</table>
+</div>
+<div class="callout warn"><strong>포기한 것:</strong> 유실 0 보장(메인 스레드에서는 동기로 쓸 수 없음), 탭 간 완전한 순서, 레코드마다 쿼리 색인 갱신.</div>
+
+<h2 id="options">3. 검토한 구조</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>안</th><th>구조</th><th>판정</th><th>이유</th></tr>
+  <tr><td>A</td><td>SharedWorker가 <code>createWritable()</code>로 기록</td><td><span class="tag bad">탈락</span></td><td>비동기 쓰기라 이 로그량을 감당하기에 느림</td></tr>
+  <tr><td>B</td><td>SharedWorker 안에 Dedicated Worker를 띄워 sync handle 사용</td><td><span class="tag bad">탈락</span></td><td>SharedWorker 안의 중첩 Worker는 Chrome 지원이 불확실</td></tr>
+  <tr><td>C</td><td>Web Locks로 리더 탭을 뽑고, 다른 탭은 BroadcastChannel로 로그 전달</td><td><span class="tag bad">비추천</span></td><td>모든 탭에 메시지가 복사되고, 리더 하나가 병목이 되며, 리더가 죽으면 그 버퍼를 잃음</td></tr>
+  <tr><td>D</td><td>C와 같지만 SharedWorker가 MessagePort 연결을 중개</td><td><span class="tag warn">가능</span></td><td>리더 교체, 재연결, Android에서의 SharedWorker 종료를 모두 처리해야 해서 복잡</td></tr>
+  <tr><td>E</td><td>탭마다 Dedicated Worker가 자기 파일에 기록</td><td><span class="tag ok">채택</span></td><td>쓰기 경로에 탭 간 통신이 없고, 탭이 늘면 처리량도 늘며, 장애가 그 탭 안에서 끝남</td></tr>
+</table>
+</div>
+
+<h3>판단 근거가 된 사실</h3>
+<ul>
+  <li><code>createSyncAccessHandle()</code>은 Dedicated Worker에서만 쓸 수 있습니다.</li>
+  <li>Android Chrome의 SharedWorker는 Chrome 148(2026)에서 다시 켜졌습니다. 앱이 백그라운드로 가면 SharedWorker 인스턴스가 종료될 수 있습니다.</li>
+  <li>sync access handle은 파일 하나에 하나만 열 수 있습니다. 그래서 파일마다 쓰는 쪽이 하나뿐이어야 합니다.</li>
+  <li>BroadcastChannel로는 MessagePort를 넘길 수 없습니다.</li>
+  <li>과거 설계에서 SharedWorker를 쓴 주된 이유는 업로드를 한 곳에서만 하기 위해서였습니다. 이 역할은 Web Locks로 대체합니다.</li>
+</ul>
+
+<h2 id="architecture">4. 선택한 구조</h2>
+<figure>
+<svg viewBox="0 0 760 400" role="img" aria-label="탭마다 메인 스레드와 Dedicated Worker가 있고, 각 Worker는 OPFS의 자기 세그먼트 파일에 기록합니다. Web Locks는 보존 정리와 업로드를 담당할 탭 하나를 고릅니다.">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <!-- Tab 1 -->
+  <rect x="20" y="20" width="220" height="150" rx="10" class="box"/>
+  <text x="36" y="44" class="label">탭 1</text>
+  <rect x="36" y="56" width="188" height="44" rx="6" class="box main"/>
+  <text x="48" y="76" font-size="13">메인 스레드</text>
+  <text x="48" y="92" class="small">log() → 링버퍼에 모음</text>
+  <rect x="36" y="114" width="188" height="44" rx="6" class="box ok"/>
+  <text x="48" y="134" font-size="13">Dedicated Worker</text>
+  <text x="48" y="150" class="small">sync handle로 기록</text>
+  <path d="M130,100 L130,112" class="line" marker-end="url(#arr)"/>
+
+  <!-- Tab 2 -->
+  <rect x="270" y="20" width="220" height="150" rx="10" class="box"/>
+  <text x="286" y="44" class="label">탭 2</text>
+  <rect x="286" y="56" width="188" height="44" rx="6" class="box main"/>
+  <text x="298" y="76" font-size="13">메인 스레드</text>
+  <text x="298" y="92" class="small">log() → 링버퍼에 모음</text>
+  <rect x="286" y="114" width="188" height="44" rx="6" class="box ok"/>
+  <text x="298" y="134" font-size="13">Dedicated Worker</text>
+  <text x="298" y="150" class="small">sync handle로 기록</text>
+  <path d="M380,100 L380,112" class="line" marker-end="url(#arr)"/>
+
+  <!-- Tab N -->
+  <rect x="520" y="20" width="220" height="150" rx="10" class="box"/>
+  <text x="536" y="44" class="label">탭 N</text>
+  <text x="536" y="100" class="small">같은 구조</text>
+
+  <!-- OPFS -->
+  <rect x="20" y="230" width="470" height="150" rx="10" class="box"/>
+  <text x="36" y="254" class="label">OPFS  /opfslogd/&lt;namespace&gt;/</text>
+  <rect x="36" y="268" width="140" height="96" rx="6" class="box ok"/>
+  <text x="48" y="290" font-size="13">active/</text>
+  <text x="48" y="310" class="small">{ts}-{tab1}.seg</text>
+  <text x="48" y="328" class="small">{ts}-{tab2}.seg</text>
+  <rect x="190" y="268" width="140" height="96" rx="6" class="box warn"/>
+  <text x="202" y="290" font-size="13">pending/</text>
+  <text x="202" y="310" class="small">봉인됨, 업로드 대기</text>
+  <rect x="344" y="268" width="130" height="96" rx="6" class="box"/>
+  <text x="356" y="290" font-size="13">done/</text>
+  <text x="356" y="310" class="small">업로드 완료</text>
+  <text x="356" y="328" class="small">정리 대상</text>
+
+  <path d="M110,158 L110,266" class="line" marker-end="url(#arr)"/>
+  <path d="M360,158 L150,266" class="line" marker-end="url(#arr)"/>
+
+  <!-- Locks -->
+  <rect x="520" y="230" width="220" height="150" rx="10" class="box main"/>
+  <text x="536" y="254" class="label">Web Locks</text>
+  <text x="536" y="282" font-size="13">opfslogd:retention</text>
+  <text x="536" y="300" class="small">잡은 탭 하나가 보존 정리</text>
+  <text x="536" y="330" font-size="13">opfslogd:upload</text>
+  <text x="536" y="348" class="small">잡은 탭 하나가 send() 호출</text>
+  <path d="M518,305 L478,305" class="line dash" marker-end="url(#arr)"/>
+</svg>
+<figcaption>로그를 쓰는 경로(실선)에는 탭 간 통신이 없습니다. 조율(점선)은 Web Locks를 잡은 탭 하나만 합니다.</figcaption>
+</figure>
+
+<h3>쓰기 경로</h3>
+<ol>
+  <li><code>log()</code>는 메인 스레드의 링버퍼에 레코드를 넣기만 합니다. 직렬화나 <code>postMessage</code>를 매번 하지 않습니다.</li>
+  <li>버퍼가 찼거나 flush 주기가 되면 레코드를 하나의 <code>ArrayBuffer</code>로 묶어 Worker에 <strong>transfer</strong>합니다(복사 없음).</li>
+  <li>Worker는 sync handle로 자기 <code>active</code> 세그먼트에 덧붙입니다.</li>
+  <li>세그먼트가 상한 크기(기본 8MB)에 도달하거나 탭이 닫히면 봉인하고 <code>pending/</code> 또는 <code>done/</code>으로 옮깁니다.</li>
+</ol>
+
+<h3>읽기 경로 (내보내기, 쿼리)</h3>
+<p>모든 탭의 세그먼트를 <code>ts</code>와 탭별 <code>seq</code> 기준으로 병합 정렬해서 읽습니다. 세그먼트 파일명에 시간 범위를 넣어 쿼리할 때 필요 없는 파일은 건너뜁니다.</p>
+
+<h3>실시간 구독</h3>
+<p>같은 탭 안에서만 지원합니다(<code>logger.subscribe(fn)</code>). 탭 간 실시간 구독은 사용 사례가 없어 범위에서 뺐습니다.</p>
+
+<h3>설정 충돌</h3>
+<p>탭마다 <code>init(config)</code>을 호출합니다. 탭끼리 설정이 다르면, Lock을 잡은 탭이 자기 설정으로 정리와 업로드를 합니다.</p>
+
+<h2 id="lifecycle">5. 세그먼트 생명주기</h2>
+<figure>
+<svg viewBox="0 0 760 170" role="img" aria-label="세그먼트는 active에서 pending, done을 거쳐 삭제됩니다. 업로드가 실패하면 pending에 남아 재시도합니다.">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+  <rect x="20" y="50" width="140" height="56" rx="8" class="box ok"/>
+  <text x="38" y="74" class="label">active</text>
+  <text x="38" y="94" class="small">기록 중</text>
+
+  <rect x="230" y="50" width="160" height="56" rx="8" class="box warn"/>
+  <text x="248" y="74" class="label">pending</text>
+  <text x="248" y="94" class="small">봉인, 업로드 대기</text>
+
+  <rect x="460" y="50" width="140" height="56" rx="8" class="box"/>
+  <text x="478" y="74" class="label">done</text>
+  <text x="478" y="94" class="small">업로드 완료</text>
+
+  <rect x="650" y="50" width="90" height="56" rx="8" class="box"/>
+  <text x="668" y="82" class="label">삭제</text>
+
+  <path d="M160,78 L228,78" class="line" marker-end="url(#arr2)"/>
+  <text x="168" y="70" class="small">봉인</text>
+  <path d="M390,78 L458,78" class="line" marker-end="url(#arr2)"/>
+  <text x="396" y="70" class="small">send() 성공</text>
+  <path d="M600,78 L648,78" class="line" marker-end="url(#arr2)"/>
+  <text x="604" y="70" class="small">보존</text>
+
+  <path d="M290,106 C290,150 340,150 340,108" class="line" marker-end="url(#arr2)"/>
+  <text x="270" y="160" class="small">send() 실패 → 재시도</text>
+
+  <path d="M90,50 C90,10 530,10 530,48" class="line dash" marker-end="url(#arr2)"/>
+  <text x="250" y="20" class="small">upload 설정 없음 → 바로 done</text>
+</svg>
+<figcaption>과거 설계의 세 단계(log write → log pending → done)를 그대로 옮겼습니다.</figcaption>
+</figure>
+<p>상태는 디렉터리로 나누고, 상태가 바뀌면 <code>FileSystemHandle.move()</code>로 이동합니다.</p>
+
+<h2 id="upload">6. 업로드</h2>
+<p>라이브러리는 업로드 프로토콜을 정하지 않습니다. 사용자가 <code>send()</code>를 넘기고, 라이브러리는 <em>언제</em>, <em>무엇을</em>, <em>몇 번</em> 보낼지만 정합니다.</p>
+<pre><code>init({
+  upload: {
+    send: async (file, meta) =&gt; {
+      const { url } = await api.requestUploadUrl(meta)   // 1. presigned URL 요청
+      await fetch(url, { method: 'PUT', body: file })      // 2. S3에 PUT
+      await api.confirmUploaded(meta.segmentId)            // 3. 완료 통보
+    },
+    intervalMs: 60_000,
+  },
+})</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>약속</th><th>내용</th></tr>
+  <tr><td>resolve</td><td>세그먼트를 <code>done</code>으로 옮김</td></tr>
+  <tr><td>reject</td><td><code>pending</code>에 그대로 두고 백오프 후 재시도</td></tr>
+  <tr><td>전달 보장</td><td>최소 한 번(at-least-once). 서버는 <code>segmentId</code>로 중복을 걸러야 함</td></tr>
+  <tr><td><code>meta</code></td><td><code>segmentId</code>, <code>sha256</code>, <code>size</code>, <code>from</code>/<code>to</code> 시간, 레코드 수</td></tr>
+  <tr><td>업로더</td><td><code>opfslogd:upload</code> Lock을 잡은 탭 하나. 그 탭이 닫히면 Lock이 자동으로 풀리고 다른 탭이 이어받음</td></tr>
+  <tr><td>실행 위치</td><td>함수는 Worker로 넘길 수 없어서, Lock을 가진 탭의 메인 스레드에서 실행. Worker가 파일을 읽어 Blob으로 넘김</td></tr>
+</table>
+</div>
+<div class="callout warn"><strong>위험:</strong> 백그라운드에서 멈춘(frozen) 탭이 Lock을 쥔 채로 있으면 업로드가 멈춥니다. 대응 후보는 화면에서 숨겨질 때(<code>visibilitychange</code> → hidden) Lock을 내려놓고 보이는 탭이 우선 업로드하게 하는 것입니다. 상세 설계는 아직 하지 않았습니다.</div>
+
+<h2 id="retention">7. 보존 정책</h2>
+<pre><code>retention: {
+  maxBytes: 100 * 1024 * 1024,        // 100MB, storage.estimate() quota의 10%를 넘지 않게 제한
+  maxAgeMs: 7 * 24 * 60 * 60 * 1000,  // 7일
+  segmentBytes: 8 * 1024 * 1024,      // 8MB, 삭제는 세그먼트 단위
+}</code></pre>
+<ul>
+  <li>두 조건 중 먼저 걸리는 쪽이 적용됩니다. 초당 0.5~1MB가 쌓일 수 있어서 실제로는 용량 상한이 먼저 걸립니다.</li>
+  <li>삭제 순서: <code>done</code>의 오래된 것부터, 그다음 <code>pending</code>의 오래된 것부터(롤링). 버린 건수를 기록합니다.</li>
+  <li>OPFS는 파일 앞부분을 잘라낼 수 없어서, 세그먼트 파일을 통째로 지우는 방식이 가장 저렴합니다.</li>
+  <li><code>navigator.storage.persist()</code>는 기본으로 호출하지 않습니다. 사용자가 옵션으로 켭니다.</li>
+</ul>
+
+<h2 id="scope">8. 범위 밖</h2>
+<ul>
+  <li>SharedWorker</li>
+  <li>탭 간 실시간 구독</li>
+  <li>탭 간 완전한 순서</li>
+  <li>라이브러리에 고정된 업로드 프로토콜</li>
+</ul>
+
+<h2 id="verify">9. 검증할 것</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>항목</th><th>왜 필요한가</th></tr>
+  <tr><td>OPFS 디렉터리 안에서 <code>FileSystemHandle.move()</code>의 브라우저별 지원</td><td>세그먼트 상태 전이에 사용</td></tr>
+  <tr><td>다른 Worker가 sync handle을 연 파일을 <code>getFile()</code>로 읽을 수 있는가</td><td>내보내기와 쿼리가 <code>active</code> 세그먼트를 읽을 수 있는지</td></tr>
+  <tr><td>Web Lock을 가진 탭이 freeze되는가</td><td>업로드가 멈추는 위험</td></tr>
+  <tr><td>Vite dev 모드에서 Worker 경로가 깨지는가 (<code>optimizeDeps.exclude</code> 필요 여부)</td><td>가장 흔한 사용 환경의 개발 경험</td></tr>
+  <tr><td>Worker 하나당 메모리 비용</td><td>탭이 많을 때 비용</td></tr>
+  <tr><td>모바일 Safari의 OPFS quota와 eviction 동작</td><td>보존 기본값 검증</td></tr>
+</table>
+</div>
+
+<h2 id="next">10. 다음 단계</h2>
+<ol>
+  <li><strong>저장 포맷:</strong> 레코드 스키마, 바이너리 또는 텍스트, 세그먼트 헤더, 파일명 규칙, 버전 필드</li>
+  <li><strong>메인 스레드↔Worker 프로토콜:</strong> 링버퍼, 묶음 전송, flush 시점, <code>pagehide</code> 처리, 과부하 시 버리기</li>
+  <li><strong>공개 API:</strong> <code>init</code>, <code>log</code>, <code>subscribe</code>, <code>export</code>, <code>query</code>, <code>upload</code></li>
+  <li><strong>벤치마크 환경:</strong> Vitest browser mode (Playwright)</li>
+</ol>
+
+</main>
+</body>
+</html>

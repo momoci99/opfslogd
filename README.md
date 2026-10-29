@@ -1,6 +1,6 @@
 # opfslogd
 
-Browser logging library built on [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) and [SharedWorker](https://developer.mozilla.org/en-US/docs/Web/API/SharedWorker).
+Browser logging library built on [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) and [Dedicated Workers](https://developer.mozilla.org/en-US/docs/Web/API/Worker), with [Web Locks](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API) for cross-tab coordination.
 
 > Work in progress.
 

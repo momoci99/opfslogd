@@ -4,7 +4,7 @@ Guide for AI coding agents working in this repo. Human contributors: see [CONTRI
 
 ## Project
 
-`opfslogd` is a browser logging library built on OPFS (Origin Private File System) and SharedWorker. It is published on npm as `opfslogd`. Work in progress (`0.x`).
+`opfslogd` is a browser logging library built on OPFS (Origin Private File System) and Dedicated Workers. It is published on npm as `opfslogd`. Work in progress (`0.x`).
 
 ## Setup and commands
 
@@ -31,7 +31,8 @@ CI (`.github/workflows/ci.yml`) runs the same steps on every push and PR.
 ```
 src/                 library source; tests next to code as *.test.ts
 src/index.ts         public entry; everything exported here is public API
-docs/decisions.md    design decision records
+docs/decisions.md    design decision records (Markdown)
+docs/design/         design documents (HTML, open in a browser)
 docs/RELEASING.md    release process (human-only)
 tsdown.config.ts     build entries and options
 vitest.config.ts     test environment
@@ -46,20 +47,19 @@ vitest.config.ts     test environment
 - No runtime dependencies without asking the user first. The package currently has zero.
 - Keep public API changes deliberate. Anything exported from `src/index.ts` is public.
 
-## SharedWorker and OPFS
+## Workers and OPFS
 
-- **Never inline the worker** as a blob URL or data URL, and never use Vite's `?sharedworker&inline`.
-  - Blob URLs differ per tab, so tabs would not share one worker.
-  - Data URLs get an opaque origin, which has no OPFS access.
-- Build the worker as a separate tsdown entry and load it like this:
+- Architecture: each tab runs its own Dedicated Worker that writes its own OPFS files with `createSyncAccessHandle()`. Cross-tab coordination (retention, upload) uses Web Locks. No SharedWorker. See `docs/decisions.md` #006, #007 and `docs/design/architecture.html`.
+- Build the worker as a separate tsdown entry and load it like this, unless the user passes `workerUrl`:
   ```ts
-  new SharedWorker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opfslogd' })
+  new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opfslogd' })
   ```
-- See `docs/decisions.md` #003 for details.
+- **Do not inline the worker.** No blob URL build (needs `worker-src blob:` in CSP) and never a data URL (opaque origin, no OPFS access).
+- See `docs/decisions.md` #009 for details.
 
 ## Testing
 
-- Vitest with `jsdom`. jsdom has **no OPFS and no SharedWorker**.
+- Vitest with `jsdom`. jsdom has **no OPFS, no Workers, and no Web Locks**.
 - Do not mock those APIs to make tests pass. Test that code with Vitest browser mode (Playwright). If browser mode is not set up yet, say so instead of faking it.
 - Add or update tests with every behavior change.
 
@@ -79,3 +79,5 @@ vitest.config.ts     test environment
 ## Decisions
 
 When you make a design decision that others will ask "why?" about, add an entry to `docs/decisions.md`.
+
+Longer design documents (architecture, flows, state diagrams, targets) go in `docs/design/*.html`, hand-written readable HTML, not minified. Do not duplicate the same content in Markdown. See `docs/decisions.md` #008.

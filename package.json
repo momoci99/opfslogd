@@ -1,10 +1,10 @@
 {
   "name": "opfslogd",
   "version": "0.0.1",
-  "description": "Browser logging library built on OPFS and SharedWorker",
+  "description": "Browser logging library built on OPFS and Web Workers",
   "keywords": [
     "opfs",
-    "shared-worker",
+    "web-worker",
     "logging",
     "logger",
     "browser"
