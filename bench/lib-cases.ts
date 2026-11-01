@@ -2,6 +2,7 @@
 
 import type { Result } from './harness'
 import { measureSync, sink } from './harness'
+import { Core } from '../src/core'
 import { newTabId } from '../src/names'
 import type { FromWorker, ToWorker } from '../src/protocol'
 import { RecordQueue } from '../src/queue'
@@ -151,4 +152,108 @@ async function roundTrips(url: URL, payload: Uint8Array, lines: number): Promise
   await (await navigator.storage.getDirectory()).removeEntry(root, { recursive: true }).catch(() => {})
   const sorted = [...times].sort((a, b) => a - b)
   return { name: `round trip, ${url.pathname.endsWith('flush.worker.ts') ? 'flush() every write' : 'no flush()'}`, medianUs: sorted[Math.floor(sorted.length / 2)] ?? NaN, minUs: sorted[0] ?? NaN, calls: 40 }
+}
+
+// ---- 8, 9: need the main-thread logger (unit 5) ----
+
+
+interface CoreInternals {
+  flushNow(): void
+  onMessage(msg: FromWorker): void
+  queue: RecordQueue
+}
+
+const coreWorkerUrl = new URL('../src/worker.ts', import.meta.url)
+
+async function withCore<T>(fn: (core: Core, internals: CoreInternals) => Promise<T>): Promise<T> {
+  const ns = `bench-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  const core = new Core()
+  core.init({ namespace: ns, workerUrl: coreWorkerUrl })
+  try {
+    return await fn(core, core as unknown as CoreInternals)
+  } finally {
+    await core.close()
+    const top = await (await navigator.storage.getDirectory()).getDirectoryHandle('opfslogd', { create: true })
+    await top.removeEntry(ns, { recursive: true }).catch(() => {})
+  }
+}
+
+/** Drop counts the queue holds for its next drop line. */
+function overloadDrops(internals: CoreInternals): number {
+  const o = (internals.queue as unknown as { overload?: { counts: Record<string, number> } }).overload
+  return o ? Object.values(o.counts).reduce((a, b) => a + b, 0) : 0
+}
+
+export async function runLib2(log: (row: LibRow) => void): Promise<LibRow[]> {
+  const rows: LibRow[] = []
+  const add = (group: string, r: Result, note?: string): void => {
+    const row = { group, ...r, note }
+    rows.push(row)
+    log(row)
+  }
+  const yieldToPage = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+  const single = (name: string, us: number, note?: string): Result & { note?: string } => ({ name, medianUs: us, minUs: us, calls: 1, note })
+
+  // 8. Fixed cost of one flush on the main thread (#017): flushNow() with one record
+  //    (take, encode, postMessage) plus handling its ack. Sets the flush interval:
+  //    the interval must be at least 100x this for flush cost <= 1% of main-thread time.
+  await withCore(async (core, internals) => {
+    await core.flush()
+    const orig = internals.onMessage.bind(core)
+    let ackUs = 0
+    internals.onMessage = (msg: FromWorker): void => {
+      const t0 = performance.now()
+      orig(msg)
+      ackUs += (performance.now() - t0) * 1000
+    }
+    const N = 400
+    let flushUs = 0
+    for (let k = 0; k < N; k++) {
+      core.log('info', 'page view')
+      const t0 = performance.now()
+      internals.flushNow()
+      flushUs += (performance.now() - t0) * 1000
+      await core.flush()
+    }
+    const perFlush = flushUs / N
+    const perAck = ackUs / N
+    add('8. flush fixed cost', single('flushNow() with 1 record', perFlush))
+    add('8. flush fixed cost', single('ack handling', perAck))
+    add(
+      '8. flush fixed cost',
+      single('total per flush', perFlush + perAck),
+      `1% of main thread at a ${((perFlush + perAck) / 10).toFixed(1)}ms interval`,
+    )
+  })
+  await yieldToPage()
+
+  // 9. Overload (#018, #019).
+  //    a) N medium records in one task: acks cannot run until the task ends, so in-flight
+  //       data piles up and the 80% / 100% limits apply.
+  for (const n of [10_000, 20_000, 50_000]) {
+    await withCore(async (core, internals) => {
+      await core.flush()
+      for (let i = 0; i < n; i++) core.log('info', 'checkout button clicked', ctxPool[i & (POOL - 1)])
+      const dropped = overloadDrops(internals)
+      add('9. overload', single(`${n} info records in one task`, 0), `accepted ${n - dropped}, dropped ${dropped}`)
+      await core.flush(30_000)
+    })
+    await yieldToPage()
+  }
+  //    b) 100k records over about 1 second, 1,000 per task (a 100k/s burst with yields).
+  await withCore(async (core, internals) => {
+    await core.flush()
+    let dropped = 0
+    const t0 = performance.now()
+    for (let task = 0; task < 100; task++) {
+      for (let i = 0; i < 1000; i++) core.log('info', 'checkout button clicked', ctxPool[i & (POOL - 1)])
+      dropped = Math.max(dropped, overloadDrops(internals))
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    const ms = performance.now() - t0
+    const after = overloadDrops(internals)
+    add('9. overload', single('100k info records, 1,000 per task', 0), `took ${ms.toFixed(0)}ms, dropped ${Math.max(dropped, after)}`)
+    await core.flush(30_000)
+  })
+  return rows
 }

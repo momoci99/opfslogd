@@ -53,7 +53,7 @@
   <text x="348" y="84" font-size="13">flush</text>
   <text x="348" y="104" class="small">join + encodeInto</text>
 
-  <text x="36" y="150" class="small">flush 조건: 200ms · 256K자 · error</text>
+  <text x="36" y="150" class="small">flush 조건: 50ms · 256K자 · error</text>
 
   <path d="M166,90 L184,90" class="line" marker-end="url(#arr)"/>
   <path d="M316,90 L334,90" class="line" marker-end="url(#arr)"/>
@@ -101,14 +101,14 @@ flush 때:  payload = strings.join('\n') + '\n'
 <div class="table-wrap">
 <table>
   <tr><th>트리거</th><th>조건 (초안)</th><th>이유</th></tr>
-  <tr><td><strong>주기</strong></td><td>버퍼가 비어 있다가 첫 레코드가 들어오면 200ms 타이머를 건다<br><span class="meta">200ms는 근거 없는 초안. 아래 "주기 숫자를 정하는 기준" 참고</span></td><td>평소 크래시 때 잃는 양의 상한. 버퍼가 비어 있으면 타이머가 없어서, 로그가 없는 탭이 계속 깨어나지 않음(모바일 배터리)</td></tr>
+  <tr><td><strong>주기</strong></td><td>버퍼가 비어 있다가 첫 레코드가 들어오면 50ms 타이머를 건다<br><span class="meta">처음 초안은 200ms. 8단계 측정으로 50ms로 정함(#077)</span></td><td>평소 크래시 때 잃는 양의 상한. 버퍼가 비어 있으면 타이머가 없어서, 로그가 없는 탭이 계속 깨어나지 않음(모바일 배터리)</td></tr>
   <tr><td><strong>크기</strong></td><td>버퍼가 256K자를 넘으면 바로</td><td>폭주 때 상한에 닿기 전에 비움. flush 한 번의 <code>join</code>과 인코딩 비용, Worker로 가는 메시지 크기를 작게 유지</td></tr>
   <tr><td><strong>error</strong></td><td>error 레벨이 들어오면 마이크로태스크로 flush. 직전 flush 후 50ms가 지나지 않았으면 그 50ms 시점으로 미룸</td><td>렌더러 크래시나 강제 종료 직전의 error를 덜 잃음. 같은 틱의 error는 한 번으로 묶이고, 여러 틱에 걸친 error 폭주에도 flush는 초당 최대 20번</td></tr>
 </table>
 </div>
 
 <h3>주기 숫자를 정하는 기준</h3>
-<p>200ms는 1단계 성능 목표에 예시로 넣은 숫자이고 근거가 없습니다. 숫자는 벤치마크에서 다음 기준으로 고릅니다.</p>
+<p>처음의 200ms는 1단계 성능 목표에 예시로 넣은 숫자이고 근거가 없었습니다. 숫자는 벤치마크에서 다음 기준으로 고르기로 했고, 8단계에서 50ms로 정했습니다(#077, <a href="benchmark.html#impl-results-2">측정</a>).</p>
 <div class="callout"><strong>저사양 모바일에서 flush 비용이 메인 스레드 시간의 1% 이하인 가장 짧은 간격</strong></div>
 <ul>
   <li>짧을수록 크래시 때 잃는 양이 줄어듭니다. 크래시를 조사할 때는 마지막 순간의 로그가 가장 중요합니다.</li>
@@ -272,7 +272,7 @@ worker.onmessage
   <tr><th>항목</th><th>왜 필요한가</th><th>상태</th></tr>
   <tr><td>레코드 하나의 <code>JSON.stringify</code> 비용 (모바일 포함)</td><td><code>log()</code> 비용 목표(수 µs 이하) 확인 (#014)</td><td>데스크톱 엔진에서 확인, #014 유지. 휴대폰은 실기기 목록</td></tr>
   <tr><td>문자열 보관 + flush 때 한 번 인코딩 vs 호출마다 <code>encodeInto</code></td><td>버퍼 형태 확정 (#014, #015)</td><td>문자열 보관이 2~10배 쌈. #015 유지</td></tr>
-  <tr><td>flush 트리거 숫자 (200ms, 256K자, 50ms). 주기는 "flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고름</td><td>폭주 때 버리는 양과 메인 스레드 멈춤 시간 사이의 균형 (#017)</td><td>구현 단계</td></tr>
+  <tr><td>flush 트리거 숫자 (200ms → 50ms #077, 256K자, 50ms). 주기는 "flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고름</td><td>폭주 때 버리는 양과 메인 스레드 멈춤 시간 사이의 균형 (#017)</td><td>구현 단계</td></tr>
   <tr><td>폭주와 메인 스레드 긴 작업이 겹칠 때 실제로 버려지는 양</td><td>ack 지연으로 문턱이 얼마나 일찍 걸리는지, 80%와 4M자가 적당한지 (#018, #019)</td><td>구현 단계</td></tr>
   <tr><td>Web Lock이나 sync access handle을 쥔 페이지가 bfcache에 들어갈 수 있는지, 들어가면 Worker는 어떻게 되는지</td><td>뒤로 가기로 돌아왔을 때 쓰기가 이어지는지 (#020)</td><td>Chromium은 들어가고 쓰기가 이어짐. Firefox, Safari는 실기기 목록</td></tr>
   <tr><td><code>pagehide</code> 때 보낸 flush가 실제로 파일에 쓰이는 비율 (브라우저별)</td><td>닫을 때 잃는 양 (#020)</td><td>구현 단계</td></tr>

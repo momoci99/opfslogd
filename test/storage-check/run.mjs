@@ -13,6 +13,9 @@ import { extname, join, normalize } from 'node:path'
 import { chromium, firefox, webkit } from 'playwright'
 
 const repo = join(import.meta.dirname, '..', '..')
+// --only=3,4 runs some sections
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',')
+const runs = (n) => !only || only.includes(String(n))
 if (!existsSync(join(repo, 'dist', 'worker.js'))) {
   console.error('dist/worker.js is missing. Run pnpm build first.')
   process.exit(1)
@@ -24,7 +27,13 @@ const server = createServer(async (req, res) => {
   if (!path.startsWith('/dist/') && !path.startsWith('/test/storage-check/')) return res.writeHead(404).end()
   try {
     const body = await readFile(join(repo, path))
-    res.writeHead(200, { 'content-type': types[extname(path)] ?? 'text/plain' })
+    // Cross-origin isolation for every response: measureUserAgentSpecificMemory() needs it,
+    // and the worker script must carry the same COEP as its page.
+    res.writeHead(200, {
+      'content-type': types[extname(path)] ?? 'text/plain',
+      'cross-origin-opener-policy': 'same-origin',
+      'cross-origin-embedder-policy': 'require-corp',
+    })
     res.end(body)
   } catch {
     res.writeHead(404).end()
@@ -48,7 +57,7 @@ const engines = [
 // 1. Kill the whole browser with SIGKILL right after the last ack, then read the files back.
 const BATCHES = 40
 console.log(`\n# 1. acked writes after SIGKILL (#074): ${BATCHES} batches of 1,300 lines`)
-for (const { name, type } of engines) {
+for (const { name, type } of runs(1) ? engines : []) {
   const profile = await mkdtemp(join(tmpdir(), `opfslogd-check-${name}-`))
   try {
     let context = await type.launchPersistentContext(profile)
@@ -80,7 +89,7 @@ for (const { name, type } of engines) {
 // WebKit has no way to lower the quota from Playwright; it stays on the device list.
 console.log('\n# 2. writes that hit the quota (#064)')
 const QUOTA = 8 * 1024 * 1024
-for (const { name, type } of engines.slice(0, 2)) {
+for (const { name, type } of runs(2) ? engines.slice(0, 2) : []) {
   for (const mode of ['raw-quota', 'lib-quota']) {
     const browser = await type.launch(
       name === 'firefox'
@@ -100,6 +109,67 @@ for (const { name, type } of engines.slice(0, 2)) {
     } finally {
       await browser.close()
     }
+  }
+}
+
+// 3. pagehide (#020): log 5,000 records/s, leave the page at a random moment, count what reached disk.
+//    'navigate' goes to another page; 'close' closes the tab.
+const libUrl = (mode, ns) => `${origin}/test/storage-check/lib-page.html?mode=${mode}&ns=${ns}`
+console.log('\n# 3. records on disk after leaving the page (#020): 5 runs each, 5,000 records/s')
+for (const { name, type } of runs(3) ? engines : []) {
+  const profile = await mkdtemp(join(tmpdir(), `opfslogd-check-${name}-`))
+  const context = await type.launchPersistentContext(profile)
+  try {
+    for (const how of ['navigate', 'close']) {
+      const results = []
+      let forced = 0
+      for (let run = 0; run < 5; run++) {
+        const ns = `pagehide-${how}-${run}`
+        const page = await context.newPage()
+        await page.goto(libUrl('log', ns))
+        await page.evaluate(() => window.__result)
+        await page.waitForTimeout(500 + Math.random() * 500)
+        if (how === 'navigate') await page.goto(`${origin}/test/storage-check/page.html`)
+        else {
+          // With runBeforeUnload, close() does not wait for the page to go away, and in
+          // WebKit under Playwright it never goes away; force a plain close after 5s.
+          const gone = new Promise((r) => page.once('close', () => r(true)))
+          await page.close({ runBeforeUnload: true })
+          if (!(await Promise.race([gone, new Promise((r) => setTimeout(() => r(false), 5000))]))) {
+            forced++
+            await page.close()
+          }
+        }
+        const reader = how === 'navigate' ? page : await context.newPage()
+        await reader.waitForTimeout(300) // let the old worker finish
+        await reader.goto(libUrl('count', ns))
+        results.push(await reader.evaluate(() => window.__result))
+        await reader.close()
+      }
+      const lost = results.map((r) => r.lost ?? r.error)
+      const logged = results.map((r) => r.logged)
+      const note = forced ? `\t(${forced} forced: closed without pagehide)` : ''
+      console.log(`${name}\t${how}\tlogged ${logged.join(', ')}\tlost ${lost.join(', ')}${note}`)
+    }
+  } catch (e) {
+    console.log(`${name}	error: ${e.message}`)
+  } finally {
+    await context.close()
+    await rm(profile, { recursive: true, force: true })
+  }
+}
+
+// 4. Worker memory: Chromium only (measureUserAgentSpecificMemory needs cross-origin isolation).
+console.log('\n# 4. worker memory (Chromium)')
+if (runs(4)) {
+  // The headless shell lacks measureUserAgentSpecificMemory(); full Chromium has it.
+  const browser = await chromium.launch({ channel: 'chromium', args: ['--enable-blink-features=ForceEagerMeasureMemory'] })
+  try {
+    const page = await browser.newPage()
+    await page.goto(libUrl('memory', 'memory'))
+    console.log(JSON.stringify(await page.evaluate(() => window.__result, undefined, { timeout: 0 })))
+  } finally {
+    await browser.close()
   }
 }
 

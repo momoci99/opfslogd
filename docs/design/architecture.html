@@ -60,7 +60,7 @@
   <tr><td>순간 폭주</td><td>1초에 100,000건이 들어와도 크래시 없음. 버리는 것은 허용하되 버린 건수를 기록</td></tr>
   <tr><td><code>log()</code> 비용</td><td>메인 스레드를 막지 않고 예외도 던지지 않음. 평균 수 µs 이하</td></tr>
   <tr><td>메모리</td><td>탭당 버퍼 상한(예: 4MB). 넘치면 정해진 정책대로 버림</td></tr>
-  <tr><td>유실 구간</td><td>크래시 시 최대 flush 주기만큼. 주기는 벤치마크로 정함(<a href="protocol.html#flush">protocol.html</a>, 초안 200ms). 페이지를 닫을 때(<code>pagehide</code>)는 가능한 한 flush</td></tr>
+  <tr><td>유실 구간</td><td>크래시 시 최대 flush 주기만큼. 주기는 벤치마크로 정함(<a href="protocol.html#flush">protocol.html</a>, 50ms, #077). 페이지를 닫을 때(<code>pagehide</code>)는 가능한 한 flush</td></tr>
   <tr><td>과부하 시 버리는 순서</td><td><code>debug</code>, <code>info</code>를 먼저 거절하고 <code>warn</code>, <code>error</code>는 상한까지 받음. 상한(100%)에서는 <code>error</code>도 거절(#019). 버린 건수는 별도 레코드로 남김</td></tr>
 </table>
 </div>

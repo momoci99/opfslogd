@@ -6,15 +6,24 @@ import { DROP_MSG } from '../../src/queue'
 
 const workerUrl = new URL('../../src/worker.ts', import.meta.url)
 
-// Remember the last worker the library creates, so a test can talk to the failing worker.
+// Remember the last worker the library creates and the message types posted to it, so
+// tests can talk to the failing worker and see when a flush is sent.
 let lastWorker: Worker | undefined
+const posted: string[] = []
 const RealWorker = window.Worker
 window.Worker = class extends RealWorker {
   constructor(url: string | URL, options?: WorkerOptions) {
     super(url, options)
     lastWorker = this
   }
+  override postMessage(message: unknown, transfer?: Transferable[] | StructuredSerializeOptions): void {
+    posted.push((message as { type?: string }).type ?? '?')
+    super.postMessage(message, transfer as Transferable[])
+  }
 }
+
+/** Number of write messages posted so far. */
+const writes = (): number => posted.filter((t) => t === 'write').length
 const failingWorkerUrl = new URL('./failing.worker.ts', import.meta.url)
 
 let ns = ''
@@ -74,16 +83,24 @@ describe('logger lifecycle', () => {
     init({ namespace: freshNamespace(), workerUrl })
     await flush()
     logger.info('before hide')
+    const before = writes()
     window.dispatchEvent(new Event('pagehide'))
-    // well before the 200ms timer
-    await expect.poll(async () => msgs(await lines('active')), { timeout: 150, interval: 10 }).toEqual(['before hide'])
+    expect(writes()).toBe(before + 1) // sent at once, not on the timer
+    await flush()
+    expect(msgs(await lines('active'))).toEqual(['before hide'])
   })
 
   it('flushes an error record soon (#017)', async () => {
     init({ namespace: freshNamespace(), workerUrl })
     await flush()
+    await new Promise((r) => setTimeout(r, 60)) // past the 50ms gap since the last flush
+    const before = writes()
     logger.error('boom', new Error('x'))
-    await expect.poll(async () => msgs(await lines('active')), { timeout: 150, interval: 10 }).toEqual(['boom'])
+    expect(writes()).toBe(before) // not inside log()
+    await Promise.resolve()
+    expect(writes()).toBe(before + 1) // in a microtask, not on the timer
+    await flush()
+    expect(msgs(await lines('active'))).toEqual(['boom'])
   })
 
   it('starts a new segment when the context changes (#031, #032)', async () => {

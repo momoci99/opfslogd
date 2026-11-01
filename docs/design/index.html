@@ -42,7 +42,7 @@
   <li>쓰기 경로(<a href="protocol.html">protocol.html</a>): <code>log()</code> 때 <code>JSON.stringify</code>(#014) → 문자열 큐(#015) → 주기·크기·error 조건으로 flush(#017) → Worker가 쓰고 ack(#018). hidden과 <code>pagehide</code> 때도 flush(#020).</li>
   <li>과부하: 메인 버퍼 + 응답 안 온 양이 80%면 debug·info 거절, 100%면 전부 거절. 버린 건수는 flush 때 한 줄로 남깁니다(#019). 쓰기가 실패한 flush도 같은 줄로 남기고, 파일은 쓰기 전으로 되돌린 뒤 로테이션합니다(#064).</li>
   <li>같은 탭 <code>subscribe()</code>는 v0.1에 포함하고, flush 때 묶음을 넘깁니다(#023).</li>
-  <li>숫자(flush 주기 200ms, 256K자, 4M자, 80%, 세그먼트 5분)는 초안이며 벤치마크로 정합니다. flush 주기는 "저사양 모바일에서 flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고릅니다.</li>
+  <li>숫자(256K자, 4M자, 80%, 세그먼트 5분)는 초안이며 벤치마크로 정합니다. flush 주기는 8단계 측정으로 50ms로 정했습니다(#077). 4M자와 80%는 측정 뒤에도 유지합니다.</li>
   <li>공개 API(<a href="api.html#overview">api.html</a>): 모듈 싱글톤 <code>init()</code> + <code>logger.info(msg, ctx?)</code>, <code>setContext</code>, <code>flush</code>, <code>close</code>, <code>subscribe</code>(디버깅용), <code>exportLogs</code>. query는 v0.1에 없습니다(#057). 실패한 logger는 메인 스레드에 부하를 주지 않습니다(#041). 브라우저 페이지가 아니면(SSR 등) 아무것도 하지 않습니다(#062). 최소 레벨 옵션과 <code>persist()</code> 옵션은 없습니다(#069, #065).</li>
   <li>세그먼트를 닫고 새로 여는 것은 "로테이션", 새로 열지 않고 옮기기만 하는 것은 "pending으로 옮김"이라고 부릅니다(#037).</li>
   <li>압축은 보류합니다.</li>

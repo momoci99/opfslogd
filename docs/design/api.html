@@ -201,7 +201,7 @@ setContext({ userId: undefined })    // 로그아웃 → { version, env }</code>
 <table>
   <tr><th>값</th><th>기본값(초안)</th><th>v0.1</th><th>이유</th></tr>
   <tr><td>버퍼 상한 (#019)</td><td>4M자</td><td>내부</td><td>단위가 UTF-16 길이라 설명이 어색함. 요청이 오면 엶</td></tr>
-  <tr><td>flush 주기, flush 크기 (#017)</td><td>200ms, 256K자</td><td>내부</td><td>벤치마크로 정할 값. 잘못 바꾸면 메인 스레드 비용이나 손실 증가</td></tr>
+  <tr><td>flush 주기, flush 크기 (#017)</td><td>50ms(#077), 256K자</td><td>내부</td><td>벤치마크로 정할 값. 잘못 바꾸면 메인 스레드 비용이나 손실 증가</td></tr>
   <tr><td>과부하 문턱 (#019)</td><td>80%</td><td>내부</td><td>위와 같음</td></tr>
   <tr><td>세그먼트 크기 상한</td><td>2MB</td><td>내부</td><td>retention, upload 용량과 얽힘. 7단계에서 8MB에서 2MB로 낮춤(#066), 실측 필요</td></tr>
   <tr><td>세그먼트 시간 상한 (#021)</td><td>5분</td><td><span class="tag ok">공개</span></td><td>업로드될 수 있기까지의 최대 지연. 앱마다 요구가 다름</td></tr>

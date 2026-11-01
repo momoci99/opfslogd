@@ -1,5 +1,5 @@
 import { type Row, runAll } from './cases'
-import { runLib } from './lib-cases'
+import { runLib, runLib2 } from './lib-cases'
 import { formatUs } from './harness'
 
 declare global {
@@ -9,7 +9,7 @@ declare global {
 }
 
 const out = document.querySelector('#out') as HTMLTableSectionElement
-const logRow = (row: Row): void => console.log(`${row.group} | ${row.name} | ${row.medianUs.toFixed(2)} µs`)
+const logRow = (row: Row): void => console.log(`${row.group} | ${row.name} | ${row.medianUs.toFixed(2)} µs | ${row.note ?? ''}`)
 const status = document.querySelector('#status') as HTMLElement
 status.textContent = `${navigator.userAgent} · running…`
 
@@ -28,6 +28,7 @@ function show(row: Row): void {
 window.__results = new Promise((r) => setTimeout(r, 100)).then(() =>
   runAll(show).then(async (rows) => {
     rows.push(...(await runLib(show)))
+    rows.push(...(await runLib2(show)))
     status.textContent = `${navigator.userAgent} · done`
     return rows
   }),

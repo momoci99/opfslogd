@@ -8,7 +8,7 @@ import { RecordQueue, type WriteFailReason } from './queue'
 import { serializeRecord, type Level } from './record'
 
 // Drafts to settle by measurement (docs/design/benchmark.html#impl).
-const FLUSH_INTERVAL_MS = 200 // #017
+const FLUSH_INTERVAL_MS = 50 // #017, #077
 const FLUSH_SIZE_CHARS = 256 * 1024 // #017
 const ERROR_FLUSH_GAP_MS = 50 // #017
 const ROTATE_MAX_BYTES = 2_000_000 // #066

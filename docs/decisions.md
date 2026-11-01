@@ -223,6 +223,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 ## 017. Flush triggers: lazy 200ms timer, 256K-character size, and error with a 50ms gap (2026-11-01)
 
+> **Amended by #077 (2026-11-01).** The timer is 50ms, set by measurement.
+
 > **Note (2026-11-01):** 200ms has no basis. It was an example value in the step-1 targets. Pick the interval by benchmark: the shortest interval at which flush cost stays at or below 1% of main-thread time on a low-end mobile device. For reference, batching delays elsewhere follow the cost of one send: Logback/Log4j2 async have no delay, Kafka `linger.ms` is 5ms, OpenTelemetry log batching and Fluent Bit flush are 1s (network). Our flush stays inside the tab, so it is likely tens of microseconds and the interval can probably be shorter than 200ms.
 
 **Decision:** The main thread flushes its string queue when any of these is true. The numbers are drafts to tune by benchmark.
@@ -1176,3 +1178,15 @@ if (isDev) logger.debug('scroll', { y })
 - `close()` is awaited by app code (logout, tests). A dead worker must not make it hang.
 - A `flush()` that returns `true` while the records were dropped would tell the caller the opposite of what happened.
 - Waiting for ready before sending would add a state and a second queue for no gain.
+
+## 077. The flush interval is 50ms (2026-11-01)
+
+**Decision:** The flush timer of #017 is 50ms instead of the 200ms draft. The size trigger (256K characters), the error trigger (50ms gap), the cap (4M characters), and the 80% threshold stay as they are.
+
+**Why:**
+- One flush costs 13-23µs on desktop engines and 47µs with 4x CPU throttling, for sending plus ack handling (docs/design/benchmark.html#impl-results-2). At 50ms that is about 0.1% of main-thread time on the throttled run, well under #017's 1%.
+- #017's rule ("the shortest interval with flush cost at or below 1%") would allow about 5ms. It leaves out the cost of waking up: the timer fires and the worker writes on every flush while records keep coming. At 5-10ms that is 100-200 wake-ups per second for a small gain.
+- What a shorter interval buys is narrow: the records lost when the renderer crashes. Navigation, hiding, and error records already flush at once (#017, #020), and navigation lost nothing in the measurement. 50ms cuts the crash window to a quarter of 200ms at a cost that stays negligible.
+- Measurements also showed the 4M-character cap and the 80% threshold are reached only when one task logs more than about 17,000 records; a 100k/s burst split across tasks drops nothing. No reason to change them.
+
+**To verify:** flush cost on a real low-end phone. `pnpm bench:serve` cannot measure it over plain http on the LAN (OPFS needs a secure context); use Android USB port forwarding or https.

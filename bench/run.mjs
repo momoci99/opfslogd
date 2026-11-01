@@ -57,8 +57,9 @@ if (serveOnly) {
       const rows = await page.evaluate(() => window.__results, undefined, { timeout: 0 })
       for (const row of rows) {
         const key = `${row.group}\t${row.name}`
-        if (!table.has(key)) table.set(key, { note: row.note ?? '', values: {} })
+        if (!table.has(key)) table.set(key, { notes: {}, values: {} })
         table.get(key).values[run.label] = row.medianUs
+        table.get(key).notes[run.label] = row.note ?? ''
       }
       await context.close()
       await launched?.close()
@@ -72,7 +73,10 @@ if (serveOnly) {
   const fmt = (us) => (us === undefined ? '-' : us >= 1000 ? `${(us / 1000).toFixed(2)} ms` : us >= 10 ? `${us.toFixed(1)} µs` : `${us.toFixed(3)} µs`)
   console.log(versions.join(' · '))
   console.log(['group', 'case', ...runs.map((r) => r.label), 'note'].join('\t'))
-  for (const [key, { note, values }] of table) {
+  for (const [key, { notes, values }] of table) {
+    // one note when every engine agrees, else one per engine
+    const distinct = [...new Set(Object.values(notes))]
+    const note = distinct.length <= 1 ? (distinct[0] ?? '') : runs.map((r) => `${r.label}: ${notes[r.label] ?? '-'}`).join(' | ')
     console.log([key, ...runs.map((r) => fmt(values[r.label])), note].join('\t'))
   }
 }

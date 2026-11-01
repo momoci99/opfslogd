@@ -202,14 +202,55 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
   <li><strong>Worker 쓰기는 충분히 빠릅니다:</strong> 257KB 묶음 하나에 약 1ms이므로 초당 약 250MB를 쓸 수 있습니다. 목표 폭주(초당 10만 건, 약 20MB/s)의 10배 이상입니다.</li>
 </ul>
 
-<h3>메인 스레드 연결(단위 5) 뒤에 잴 것</h3>
+<h3 id="impl-results-2">단위 5(메인 스레드 연결) 뒤의 결과</h3>
+<p>같은 환경. 코드: <code>bench/lib-cases.ts</code>(8, 9번), <code>test/storage-check/</code>(3, 4번, <code>pnpm check:storage --only=3,4</code>).</p>
+<div class="table-wrap">
+<table>
+  <tr><th>측정</th><th>Chromium</th><th>Firefox</th><th>WebKit</th><th>Chromium 4x</th></tr>
+  <tr><th colspan="5">8. flush 한 번의 고정 비용: 레코드 1개 flush(<code>take</code>, 인코딩, <code>postMessage</code>) + ack 처리 (#017)</th></tr>
+  <tr><td>flush 보내기</td><td>10.5 µs</td><td>20 µs</td><td>5 µs</td><td>39 µs</td></tr>
+  <tr><td>ack 처리</td><td>2.3 µs</td><td>2.5 µs</td><td>12.5 µs</td><td>7.3 µs</td></tr>
+  <tr><td><strong>합계</strong></td><td><strong>13 µs</strong></td><td><strong>23 µs</strong></td><td><strong>18 µs</strong></td><td><strong>47 µs</strong></td></tr>
+  <tr><td>메인 스레드 1%가 되는 flush 주기</td><td>1.3 ms</td><td>2.3 ms</td><td>1.8 ms</td><td>4.7 ms</td></tr>
+  <tr><th colspan="5">9. 과부하: 중간 레코드(184바이트) info (#018, #019). 네 환경 모두 같은 결과</th></tr>
+  <tr><td>한 작업 안에서 1만 건</td><td colspan="4">전부 받음</td></tr>
+  <tr><td>한 작업 안에서 2만 건 / 5만 건</td><td colspan="4">17,392건까지 받고 나머지 버림 (80% 문턱, 약 3.2M자)</td></tr>
+  <tr><td>10만 건을 작업 100개에 나눠서(초당 10만 건 폭주)</td><td colspan="4">버린 것 없음 (0.5 ~ 0.8초 걸림)</td></tr>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>확인</th><th>Chromium</th><th>Firefox</th><th>WebKit</th><th>설계에 미치는 영향</th></tr>
+  <tr>
+    <td>초당 5,000건을 기록하다 다른 페이지로 이동했을 때 잃은 레코드 (#020). 5번씩</td>
+    <td>0, 0, 0, 0, 0</td><td>0, 0, 0, 0, 0</td><td>0, 0, 0, 0, 0</td>
+    <td><code>pagehide</code> flush가 이동 때 모두 씁니다.</td>
+  </tr>
+  <tr>
+    <td>같은 조건에서 탭을 닫았을 때 잃은 레코드</td>
+    <td>0 ~ 50 (5번 중 1~3번 50)</td><td>0, 0, 0, 0, 0</td>
+    <td>0 ~ 600 (5번 중 1번). Playwright에서 <code>pagehide</code>를 거치는 닫기가 끝나지 않아 바로 닫았습니다</td>
+    <td>Chromium은 마지막 10ms 묶음(50건)을 가끔 잃습니다. <code>pagehide</code> 없이 닫힌 WebKit도 대부분 다 남았습니다. #020이 받아들인 "최선 노력" 범위입니다.</td>
+  </tr>
+  <tr>
+    <td>Worker 메모리 (Chromium, <code>measureUserAgentSpecificMemory</code>)</td>
+    <td colspan="3">시작 직후 약 320KB, 10만 건 폭주 뒤 약 380KB</td>
+    <td>탭마다 Worker 하나의 비용은 수백 KB입니다.</td>
+  </tr>
+</table>
+</div>
 <ul>
-  <li>flush 주기와 크기: 200ms, 256K자, error 뒤 50ms (#017). flush 한 번마다 드는 고정 비용(<code>postMessage</code>, 타이머, ack)을 재서 정합니다.</li>
-  <li>폭주와 메인 스레드 긴 작업이 겹칠 때 버려지는 양, 80% 문턱과 4M자 상한 (#018, #019)</li>
-  <li><code>pagehide</code> 때 보낸 flush가 파일에 쓰이는 비율 (#020)</li>
-  <li>flush마다 새 버퍼를 할당할 때의 GC 비용 (#015)</li>
-  <li>Worker 하나당 메모리</li>
-  <li>로그가 많은 앱의 업로드 요청 빈도, 탭 여러 개일 때 retention 동작 (세그먼트 2MB, #066)</li>
+  <li><strong>flush 고정 비용이 작습니다:</strong> 200ms 주기면 Chromium 4x에서 메인 스레드의 약 0.02%입니다. 1% 기준(#017)만 보면 Chromium 4x에서 약 5ms까지 줄일 수 있습니다. 주기는 50ms(약 0.1%)로 정했습니다(#077). 실제 저사양 휴대폰은 아직 재지 않았습니다(아래 참고).</li>
+  <li><strong>4M자 상한과 80% 문턱 (#019):</strong> 문턱은 한 작업 안에서 약 1만 7천 건을 넘게 기록할 때만 닿습니다. 작업 사이에 ack가 처리되면 초당 10만 건도 버리지 않습니다. 상한과 문턱을 바꿀 근거가 없으므로 유지합니다.</li>
+  <li><strong>GC (#015):</strong> 따로 재지 않았습니다. flush마다 버퍼를 새로 할당하는 비용은 6, 8번 측정에 들어 있고, 둘 다 작습니다.</li>
+  <li><strong>휴대폰에서 OPFS 측정은 <code>pnpm bench:serve</code>로 할 수 없습니다:</strong> LAN 주소의 http 페이지는 secure context가 아니어서 OPFS와 Worker 쓰기(7, 8번)가 동작하지 않습니다. Android는 USB 포트 포워딩(<code>localhost</code>)으로 열면 됩니다. iOS Safari는 https가 필요합니다.</li>
+</ul>
+
+<h3>아직 재지 않은 것</h3>
+<ul>
+  <li>로그가 많은 앱의 업로드 요청 빈도, 탭 여러 개일 때 retention 동작 (세그먼트 2MB, #066): upload와 retention 구현(단위 7, 8) 뒤에 잽니다.</li>
+  <li>실제 저사양 휴대폰에서 8번(flush 고정 비용)</li>
 </ul>
 
 <h2 id="manual">6. 실기기에서 직접 확인할 것</h2>
