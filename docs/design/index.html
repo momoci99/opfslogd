@@ -78,11 +78,11 @@
 <h2 id="impl-later">8단계(구현)에서 정할 것</h2>
 <p>설계 결정이 아니라 구현하면서 정하면 되는 값과 순서입니다.</p>
 <ul>
-  <li>세그먼트 헤더 줄의 키 이름(<a href="storage-format.html#layout">storage-format.html</a>)</li>
-  <li>tabId 형식(길이, 문자)</li>
-  <li><code>namespace</code>에 허용할 문자. 디렉터리 이름과 Lock 이름에 안전해야 합니다(#034)</li>
+  <li><s>세그먼트 헤더 줄의 키 이름(<a href="storage-format.html#layout">storage-format.html</a>)</s> → #071</li>
+  <li><s>tabId 형식(길이, 문자)</s> → #072</li>
+  <li><s><code>namespace</code>에 허용할 문자. 디렉터리 이름과 Lock 이름에 안전해야 합니다(#034)</s> → #073</li>
   <li>ack가 끊겼다고 판단할 시간(<code>worker-unresponsive</code>, #040)</li>
-  <li>retention drop 줄의 <code>ctx</code> 필드(#050, #061)와 쓰기 실패 drop 줄의 필드(#064)</li>
+  <li><s>retention drop 줄의 <code>ctx</code> 필드(#050, #061)와 쓰기 실패 drop 줄의 필드(#064)</s> → #070</li>
   <li>헤더 줄만 있는 주인 없는 파일 처리(지울지, 빈 pending으로 옮길지)</li>
   <li>Worker는 활성 파일을 만들기 전에 탭 Lock부터 잡습니다. 순서가 바뀌면 다른 탭이 그 파일을 주인 없는 파일로 보고 복구할 수 있습니다(#012)</li>
   <li>구현 단계 측정은 <a href="benchmark.html#impl">benchmark.html</a>에 있습니다.</li>

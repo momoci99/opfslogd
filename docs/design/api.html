@@ -97,7 +97,7 @@ logger.warn('slow response')</code></pre>
 <pre><code>"err": {"name":"Error","message":"upload failed","stack":"...",
         "cause": {"name":"TypeError","message":"Failed to fetch","stack":"..."}}</code></pre>
 <ul>
-  <li><code>cause</code>도 같은 모양으로 재귀 저장합니다. 깊이는 최대 5단계입니다.</li>
+  <li><code>cause</code>도 같은 모양으로 재귀 저장합니다. 깊이는 최대 5단계입니다. 맨 위 Error는 세지 않으므로 err 하나에 Error가 최대 6개 들어갑니다.</li>
   <li>체인 안에서 이미 나온 Error를 다시 가리키면(순환) 거기서 멈춥니다.</li>
   <li>Error가 아닌 <code>cause</code>는 일반 값으로 저장하고, 직렬화가 안 되면 #011처럼 대체값을 넣습니다.</li>
 </ul>
@@ -192,6 +192,7 @@ setContext({ userId: undefined })    // 로그아웃 → { version, env }</code>
 <h2 id="options">5. 기본 옵션</h2>
 <h3 id="namespace"><code>namespace</code>: 같은 출처의 앱 분리 (#034)</h3>
 <p><code>init({ namespace })</code>(기본값 <code>'default'</code>)는 OPFS 디렉터리 <code>opfslogd/{namespace}/</code>를 고르고, 모든 Lock 이름 앞에 붙습니다: <code>opfslogd:{ns}:upload</code>, <code>opfslogd:{ns}:retention</code>, <code>opfslogd:{ns}:tab:{tabId}</code>. #012, #022의 Lock 이름을 고친 것이며, 세그먼트 파일명(#012, #013)은 그대로입니다.</p>
+<p>허용 문자는 <code>[a-z0-9_-]</code>, 1~64자입니다(#073). 디렉터리 이름과 Lock 이름에 안전하고, 엔진마다 대소문자 구별이 다를 수 있어 소문자만 받습니다. 어기면 <code>init()</code>은 예외를 던지지 않고 <code>invalid-option</code>을 보고한 뒤 닫힘 상태가 됩니다(#041과 같음). 잘못된 문자를 바꿔 주지 않는 이유는, 다른 두 namespace가 한 디렉터리로 합쳐질 수 있어서입니다.</p>
 <p>OPFS와 Web Locks는 출처 단위입니다. 같은 출처의 앱 두 개(<code>user.github.io/app1</code>과 <code>/app2</code>, 회사 도메인 하나의 여러 앱, 마이크로 프론트엔드)가 네임스페이스 없이 쓰면 디렉터리와 업로드 Lock을 공유합니다. 앱 1의 <code>send()</code>가 앱 2의 로그를 앱 1의 백엔드로 보내고, 보존 용량도 같이 씁니다. 조용히 일어나고 데이터 유출에 가깝습니다. 나중에 깨지지 않게 추가하려 해도 지금 <code>opfslogd/default/</code> 구조가 필요하므로, 옵션 자체의 비용은 문자열 하나입니다.</p>
 <p>알리는 방법: 옵션의 JSDoc(IDE에서 마우스를 올리면 보임)과 README의 "같은 도메인에 앱이 여러 개라면" 절에 사고 시나리오를 그대로 씁니다. 런타임 감지와 경고는 하지 않습니다. 두 앱을 구별할 단서가 없습니다(<code>location.pathname</code>은 SPA 라우트마다, Worker 스크립트 URL은 해시 배포마다 바뀜). 오탐 경고는 경고를 무시하는 습관만 만듭니다. "upload 설정 + 기본 namespace"에 경고하면 앱이 하나인 거의 모든 사용자가 경고를 봅니다.</p>
 
@@ -243,6 +244,7 @@ const written = await flush(1000)</code></pre>
   <tr><td><code>write-failed</code></td><td>용량 부족 말고 다른 이유로 세그먼트 쓰기 실패(#064, 7단계에서 추가)</td></tr>
   <tr><td><code>worker-unresponsive</code></td><td>ack가 끊김. Worker가 죽었거나 멈춤(#018)</td></tr>
   <tr><td><code>unreadable-file</code></td><td>새 포맷 파일이라 건너뜀(#013)</td></tr>
+  <tr><td><code>invalid-option</code></td><td>옵션 값이 규칙에 맞지 않음. 닫힘 상태가 됨(#073, 8단계에서 추가)</td></tr>
 </table>
 </div>
 <ul>

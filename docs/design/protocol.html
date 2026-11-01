@@ -203,13 +203,22 @@ worker.onmessage
 <p>버릴 때마다 레벨별 숫자만 셉니다. 다음 flush에서 숫자가 0이 아니면 맨 끝에 한 줄을 붙이고 카운터를 0으로 되돌립니다. 필드 이름은 초안입니다.</p>
 <pre><code>{"ts":1793251200400,"lv":"warn","msg":"opfslogd: records dropped","ctx":{"reason":"overload","dropped":{"debug":1200,"info":300},"from":1793251200210,"to":1793251200390}}</code></pre>
 <ul>
-  <li>flush마다 최대 한 줄이라 이 줄이 폭주하지 않습니다.</li>
+  <li>flush마다 사유별로 최대 한 줄(최대 네 줄)이라 이 줄이 폭주하지 않습니다(#070).</li>
   <li>일반 레코드와 같은 형태라 export와 업로드가 따로 처리할 필요가 없습니다. seq도 하나 차지합니다.</li>
-  <li><code>from</code>, <code>to</code>는 처음과 마지막으로 버린 시각입니다. 읽는 사람이 이 구간에 빈 곳이 있다는 것을 알 수 있습니다.</li>
+  <li><code>from</code>, <code>to</code>는 잃은 레코드의 ts 범위입니다. 과부하는 거절한 시각, 쓰기 실패는 그 flush의 <code>minTs</code>와 <code>maxTs</code>, retention은 지운 파일 이름의 시각입니다. 읽는 사람이 이 구간에 빈 곳이 있다는 것을 알 수 있습니다(#070).</li>
   <li>journald가 로그 안에 "Suppressed N messages" 줄을 남기는 것과 같은 방식입니다. <code>reason</code>은 Sentry처럼 이유를 구분하려고 둡니다. 다른 이유도 같은 형식으로 남깁니다: <code>"retention"</code>(보존 정리로 지운 pending 세그먼트, #050), <code>"quota"</code>와 <code>"write-failed"</code>(쓰기 실패, #064).</li>
   <li><strong>모든 레코드 줄은 메인 스레드의 flush에서 나옵니다(#061).</strong> Worker에서 생긴 사건(retention 삭제)은 건수만 메인에 보내고, 메인이 다음 flush에서 drop 줄로 씁니다. 그래야 메인이 센 seq와 파일의 줄 번호가 맞습니다. tabId도 메인이 만듭니다.</li>
   <li>앱에 따로 알리는 콜백은 두지 않습니다(#039). drop 줄을 알아보는 방법은 #044입니다.</li>
 </ul>
+
+<h3>사유별 필드 (#070)</h3>
+<pre><code>// overload
+{"reason":"overload","dropped":{"debug":1200,"info":300},"from":…,"to":…}
+// quota, write-failed: overload와 같은 모양. 메인은 응답 안 온 flush마다 레벨별 줄 수를 기억
+{"reason":"quota","dropped":{"info":800,"error":2},"from":…,"to":…}
+// retention: 파일을 읽지 않으면 레코드 수를 모르므로 세그먼트 수와 바이트
+{"reason":"retention","segments":3,"bytes":6200000,"from":…,"to":…}</code></pre>
+<p>사유가 있는 것만, overload, quota, write-failed, retention 순서로 flush의 레코드 뒤에 붙습니다. <code>dropped</code>에는 0이 아닌 레벨만 들어갑니다.</p>
 
 <h2 id="lifecycle">7. 숨겨질 때와 닫힐 때 (#020)</h2>
 <div class="table-wrap">

@@ -401,6 +401,7 @@ try { ... } catch (e) {
 ```
 
 - At most 5 levels of `cause` are stored. Deeper causes are dropped.
+  The top error does not count: one `err` holds at most 6 errors (the top error plus 5 causes). Clarified in step 8 (2026-11-01).
 - A cycle (a cause that points back to an error already in the chain) ends the chain.
 - A `cause` that is not an `Error` (a string, an object) is stored as an ordinary value. If it cannot be serialized, it is replaced as in #011.
 
@@ -546,6 +547,8 @@ The name is provisional and may be revisited before `1.0`.
 
 ## 034. `namespace` option separates apps on the same origin (2026-11-01)
 
+> **Amended by #073 (2026-11-01).** Allowed characters: `[a-z0-9_-]`, 1-64 characters.
+
 **Decision:** `init({ namespace })` (default `'default'`) selects the OPFS directory `opfslogd/{namespace}/` and prefixes every lock name:
 
 - `opfslogd:{namespace}:upload`
@@ -627,6 +630,8 @@ The same rule covers every state, with no special cases:
 ## 040. Internal errors go to `init({ onError })` as `OpfslogdError` with a `code` (2026-11-01)
 
 > **Amended by #064 (2026-11-01).** New code `write-failed` (a segment write failed for a reason other than quota). Write failures are reported once when they start, not on every failed flush.
+
+> **Amended by #073 (2026-11-01).** New code `invalid-option` (an option value breaks its rules; the logger stays closed).
 
 **Decision:**
 
@@ -1064,3 +1069,69 @@ if (isDev) logger.debug('scroll', { y })
 - `init({ level })` can be added later without breaking the API (#035).
 
 **Trade-off:** apps cannot turn off `debug` in one place, and calls from third-party packages that log to this logger cannot be filtered. In production, `debug` records fill retention (#052) and upload volume faster. Revisit if users ask.
+
+## 070. Drop lines: one per reason per flush; `from` and `to` are the time range of the lost records (2026-11-01)
+
+**Decision:** Fills in the drop line fields left open by #019, #050, and #064. All drop lines keep `lv` `"warn"` and `msg` `"opfslogd: records dropped"` (#044), and skip the overload cap.
+
+```jsonc
+// overload (#019)
+{"reason":"overload","dropped":{"debug":1200,"info":300},"from":…,"to":…}
+// failed write (#064): same shape as overload
+{"reason":"quota","dropped":{"info":800,"error":2},"from":…,"to":…}
+{"reason":"write-failed","dropped":{"info":800},"from":…,"to":…}
+// retention (#050): record count unknown without reading the file
+{"reason":"retention","segments":3,"bytes":6200000,"from":…,"to":…}
+```
+
+- A flush writes one drop line per reason that has counts, so at most four. Lines are appended after the flush's records in a fixed order: overload, quota, write-failed, retention.
+- `dropped` counts by level and lists only levels above zero. For a failed write, the main thread keeps the per-level line counts of each in-flight flush (four numbers) next to its size (#018).
+- `from` and `to` are the smallest and largest `ts` of the lost records: the `log()` call times for overload, the flush's `minTs` and `maxTs` for a failed write (#067), and the times in the deleted file names for retention (#012).
+
+**Why:**
+- `reason` holds one value, so mixed reasons need separate lines. The count is still bounded per flush, which is what #019's "one line per flush" protected.
+- The same shape for overload and failed writes lets readers handle both with one piece of code.
+- One meaning for `from` and `to` everywhere: the gap a reader should expect in the log.
+- Counting records in deleted segments would mean reading every file before deleting it. Segments and bytes are known from the directory listing.
+
+**Known effect:** drop lines travel in a flush like any other line. If that flush fails, their detail is lost; the new `quota` or `write-failed` line counts them as `warn` lines and its `from`/`to` covers the gap. This needs storage failure and overload at the same time, so the counts are not put back.
+
+## 071. Segment header keys are `format`, `minReader`, `tab`, `seq0`, `context` (2026-11-01)
+
+**Decision:** The draft key names of the header line (#016) are final:
+
+```json
+{"format":1,"minReader":1,"tab":"k3f9","seq0":0,"context":{"version":"2.3.1"}}
+```
+
+`format` and `minReader` are #013's `formatVersion` and `minReaderVersion`. The header always has `context`, `{}` when empty. Exported lines (#033) leave out `context` when it is empty.
+
+**Why:**
+- `tab` and `context` match the keys of an exported line, so the mapping is obvious.
+- The header is one line per file, so key length does not matter.
+- The header starts with `{"format":` and record lines with `{"ts":`, so the two are easy to tell apart.
+- An empty `context` on every exported line adds bytes and no information.
+
+## 072. Tab ID: 8 random lowercase letters and digits (2026-11-01)
+
+**Decision:** The main thread creates the tab ID (#061) as 8 characters from `[0-9a-z]` (base36), drawn with `crypto.getRandomValues`. No check for an ID already in use.
+
+**Why:**
+- The ID appears in file names (`_` is the separator), lock names (`:` is the separator), and every exported line. Base36 has neither separator and stays short (about 15 bytes per exported line with the key).
+- 36^8 is about 2.8 × 10^12. Two tabs open at the same time on one origin practically never collide, and old files are told apart by the `startTs` in front of the ID.
+- A collision check (try the tab lock with `ifAvailable`, retry on failure) adds code for an event that does not happen in practice.
+
+**Rejected:** `crypto.randomUUID()` (36 characters, about 30 more bytes per exported line, more uniqueness than this needs); 6 characters (about 2 × 10^9, saves only 2 characters).
+
+## 073. `namespace` allows `[a-z0-9_-]`, 1-64 characters; an invalid value reports `invalid-option` and leaves the logger closed (2026-11-01)
+
+**Decision:** `namespace` (#034) must match `/^[a-z0-9_-]{1,64}$/`. When it does not, `init()` does not throw. It reports a new `OpfslogdError` code, `invalid-option` (#040), and the logger behaves as closed, as in #041 (no warning from #030; the error report already says why).
+
+**Why:**
+- No `/` or `.`: safe as an OPFS directory name (no `..`, no path separator).
+- No `:`: lock names stay unambiguous (`opfslogd:{ns}:tab:{tabId}`).
+- No uppercase: whether OPFS names are case-sensitive was not checked on every engine, so `App` and `app` might or might not share a directory.
+- Starting strict keeps a later loosening non-breaking; tightening later would break users.
+- The library never throws into app code (#040). Without `onError`, `console.error` prints once, so a typo does not go unnoticed.
+
+**Rejected:** rewriting invalid characters (`My App` to `my-app`). Two different namespaces could map to one directory, the same mixing #034 exists to prevent.
