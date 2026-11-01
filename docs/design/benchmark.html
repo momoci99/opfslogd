@@ -155,6 +155,7 @@ pnpm check:vite                                        # Vite 앱에서 Worker �
   <li>flush마다 새 버퍼를 할당할 때의 GC 비용 (#015)</li>
   <li>Worker 하나당 메모리</li>
   <li>쓰기가 실패할 때(<code>QuotaExceededError</code>) 브라우저가 일부만 쓰는지 (#064)</li>
+  <li>렌더러가 죽어도 ack한 쓰기가 남는지(<code>handle.flush()</code> 없이), 그리고 묶음마다 <code>flush()</code>를 부를 때의 비용 (#074)</li>
   <li>로그가 많은 앱의 업로드 요청 빈도, 탭 여러 개일 때 retention 동작 (세그먼트 2MB, #066)</li>
 </ul>
 

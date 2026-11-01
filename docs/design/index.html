@@ -84,7 +84,7 @@
   <li>ack가 끊겼다고 판단할 시간(<code>worker-unresponsive</code>, #040)</li>
   <li><s>retention drop 줄의 <code>ctx</code> 필드(#050, #061)와 쓰기 실패 drop 줄의 필드(#064)</s> → #070</li>
   <li>헤더 줄만 있는 주인 없는 파일 처리(지울지, 빈 pending으로 옮길지)</li>
-  <li>Worker는 활성 파일을 만들기 전에 탭 Lock부터 잡습니다. 순서가 바뀌면 다른 탭이 그 파일을 주인 없는 파일로 보고 복구할 수 있습니다(#012)</li>
+  <li><s>Worker는 활성 파일을 만들기 전에 탭 Lock부터 잡습니다. 순서가 바뀌면 다른 탭이 그 파일을 주인 없는 파일로 보고 복구할 수 있습니다(#012)</s> → 단위 4에서 구현(<code>src/worker.ts</code>)</li>
   <li>구현 단계 측정은 <a href="benchmark.html#impl">benchmark.html</a>에 있습니다.</li>
 </ul>
 

@@ -1135,3 +1135,23 @@ if (isDev) logger.debug('scroll', { y })
 - The library never throws into app code (#040). Without `onError`, `console.error` prints once, so a typo does not go unnoticed.
 
 **Rejected:** rewriting invalid characters (`My App` to `my-app`). Two different namespaces could map to one directory, the same mixing #034 exists to prevent.
+
+## 074. The worker calls `handle.flush()` only when a segment is closed, not after every write (2026-11-01)
+
+**Decision:** After each batch the worker calls `handle.write()` and acks. `handle.flush()` runs only when the segment is rotated or closed, just before the handle is closed and the file moved.
+
+**Why:**
+- `flush()` asks the system to persist the data to disk (like `fsync`). On every batch (about 5 per second per tab) that is a disk sync per batch, mostly on mobile flash.
+- What a log loses without it is narrow: data that the browser already took but the OS had not yet stored when the whole device lost power or the OS crashed. A tab crash or kill is the common case, and data handed to the OS survives it.
+
+**To verify (implementation, step 10):** that a killed renderer keeps every acked write in Chromium, Firefox, and WebKit, and the cost of `flush()` per batch. If an engine loses acked writes, flush per batch there.
+
+## 075. Closed segments with no records are deleted; a closed-name clash raises `maxTs` by 1ms (2026-11-01)
+
+**Decision:**
+- A segment is opened at the first write (#064), so a segment without records exists only when its first batch failed. Rotation deletes such a segment instead of moving it.
+- If the closed name (#012, #067) already exists in the target directory, the worker raises the `maxTs` in the name by 1ms until the name is free.
+
+**Why:**
+- A file with only a header line holds nothing for export or upload.
+- `move()` onto an existing name replaces that file. A clash needs two segments of one tab whose records all share one millisecond, for example two context changes (#031) within 1ms. Losing a whole segment for that is worse than a name range 1ms wider than the records; the range still covers every record, which is what #067 relies on.
