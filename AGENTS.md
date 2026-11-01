@@ -19,7 +19,7 @@ Guide for AI coding agents working in this repo. Human contributors: see [CONTRI
 | `pnpm lint:pkg` | publint check of `package.json` exports |
 | `pnpm exec playwright install chromium firefox webkit` | Browsers for the `browser` project (once) |
 | `pnpm bench` / `pnpm bench:serve` | Speed measurements in desktop engines / served on the LAN for phones |
-| `pnpm check:bfcache` / `pnpm check:vite` | Manual browser checks (not in CI); see `docs/design/benchmark.html` |
+| `pnpm check:bfcache` / `pnpm check:vite` / `pnpm check:storage` | Manual browser checks (not in CI; `check:vite` and `check:storage` need `pnpm build` first); see `docs/design/benchmark.html` |
 
 **Before finishing any change, run:**
 

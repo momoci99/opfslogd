@@ -39,7 +39,7 @@
 pnpm test                                              # unit + browser
 pnpm vitest run --project browser --reporter=verbose   # 브라우저 결과만, 기록 줄 포함
 pnpm check:bfcache                                     # bfcache 확인 (Chromium 창이 열림)
-pnpm check:vite                                        # Vite 앱에서 Worker 경로 확인
+pnpm build &amp;&amp; pnpm check:vite                       # Vite 앱에서 Worker 경로 확인 (가짜 패키지 + 실제 dist)
 pnpm build &amp;&amp; pnpm check:storage                    # 강제 종료 뒤 남는 쓰기, quota 초과 때 쓰기 (8단계)
 node bench/run.mjs --only=firefox                      # bench를 한 엔진에서만</code></pre>
 <ul>
@@ -95,6 +95,7 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
 
 <h3>Vite 확인 방법과 조건</h3>
 <p><code>test/vite-dev/run.mjs</code>(<code>pnpm check:vite</code>)가 가짜 패키지(<code>test/vite-dev/fake-pkg</code>)를 임시 Vite 앱의 <code>node_modules</code>에 복사해 넣고, 세 경우를 Chromium headless에서 엽니다. Worker는 자기가 어디서 로드됐는지와 OPFS가 되는지를 보고합니다. Vite는 Vitest가 의존하는 것을 그대로 씁니다.</p>
+<p>8단계부터는 빌드한 실제 패키지(<code>package.json</code> + <code>dist/</code>)도 같은 방식으로 넣고, <code>init()</code> → <code>logger.info()</code> → <code>flush()</code> 뒤 OPFS 파일에서 레코드를 다시 읽습니다. dev와 build + preview 모두 됩니다(2026-11-01, Vite 8.3.5, Chromium). Worker와 메인이 함께 쓰는 코드가 별도 청크로 나뉘어도 문제없습니다.</p>
 <ul>
   <li><strong>조건:</strong> Vite는 <code>new Worker(new URL('./worker.js', import.meta.url), ...)</code>가 한 식으로 쓰였을 때만 Worker로 알아봅니다. URL을 변수에 담아 <code>new Worker(url)</code>로 넘기면 dev에서는 되지만, build에서는 Worker 파일이 작은 에셋으로 취급되어 <code>data:</code> URL로 인라인되고 OPFS가 <code>SecurityError: Storage directory access is denied</code>로 막힙니다. 개발 중에는 보이지 않고 배포 후에만 드러납니다.</li>
   <li>Vite 외 번들러(webpack, Rollup, esbuild 단독 등)는 아직 확인하지 않았습니다.</li>

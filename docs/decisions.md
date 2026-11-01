@@ -1161,3 +1161,18 @@ if (isDev) logger.debug('scroll', { y })
 **Why:**
 - A file with only a header line holds nothing for export or upload.
 - `move()` onto an existing name replaces that file. A clash needs two segments of one tab whose records all share one millisecond, for example two context changes (#031) within 1ms. Losing a whole segment for that is worse than a name range 1ms wider than the records; the range still covers every record, which is what #067 relies on.
+
+## 076. Main-thread details settled in implementation: ack timeout 10s, `close()` gives up after 5s, `flush()` is `false` after a failed write (2026-11-01)
+
+**Decision:**
+- `worker-unresponsive` (#040) is reported when batches are in flight and no ack has arrived for 10 seconds. It is reported once and again only after acks have resumed and stopped again.
+- `close()` (#030) waits at most 5 seconds for the last ack, then at most 5 seconds for the worker to move its segment, then terminates the worker either way. If the move did not happen, orphan recovery moves the file later (#020).
+- `flush()` (#038) resolves `false` when a batch it waited for was acked as failed (#064), not only on timeout. "Written" means on disk.
+- The main thread sends batches right after `init()` creates the worker, without waiting for the worker's ready message. The worker handles messages in order, so they are written after it has started; if it fails to start, the logger closes (#041).
+- Level methods take `ctx?: object`, not `Record<string, unknown>`. An interface or class instance has no index signature and would not type-check against `Record<string, unknown>`.
+
+**Why:**
+- A 257KB batch is written in about 1ms (docs/design/benchmark.html#impl-results). Even with the worker busy preparing an export or an upload, 10 seconds without any ack means the worker is dead or stuck. A shorter limit would report false alarms during long main-thread tasks, which delay ack handling (#018).
+- `close()` is awaited by app code (logout, tests). A dead worker must not make it hang.
+- A `flush()` that returns `true` while the records were dropped would tell the caller the opposite of what happened.
+- Waiting for ready before sending would add a state and a second queue for no gain.
