@@ -3,7 +3,7 @@
 import { Core, type InitOptions, type Subscriber } from './core'
 import type { Level } from './record'
 
-export type { InitOptions, LogRecord, Subscriber } from './core'
+export type { InitOptions, LogRecord, SendMeta, Subscriber, UploadOptions } from './core'
 export { OpfslogdError, type OpfslogdErrorCode } from './errors'
 export type { Level } from './record'
 

@@ -4,6 +4,7 @@ import { lockNames } from './names'
 import { openDirs, type Dirs } from './opfs'
 import type { FromWorker, ToWorker } from './protocol'
 import { runRetention } from './retention'
+import { listPending, markDone, prepare } from './upload-worker'
 import { SegmentWriter } from './writer'
 
 type InitMsg = Extract<ToWorker, { type: 'init' }>
@@ -49,6 +50,10 @@ async function handle(msg: ToWorker): Promise<void> {
       // It never touches this tab's active file, whose tab lock is held.
       void maintain()
       return
+    case 'call':
+      // Upload steps read and move pending/ files only; like retention, they run beside writes.
+      void answer(msg.id, msg.call)
+      return
     case 'close':
       await writer?.close()
       writer = undefined
@@ -83,6 +88,19 @@ async function maintain(): Promise<void> {
   } finally {
     maintaining = false
   }
+}
+
+async function answer(id: number, call: Extract<ToWorker, { type: 'call' }>['call']): Promise<void> {
+  let value: unknown
+  try {
+    if (!setup) throw new Error('not started')
+    const { dirs } = setup
+    value =
+      call.op === 'list-pending' ? await listPending(dirs) : call.op === 'prepare' ? await prepare(dirs, call.name) : await markDone(dirs, call.name)
+  } catch {
+    value = call.op === 'list-pending' ? [] : call.op === 'prepare' ? { kind: 'skip' } : false
+  }
+  post({ type: 'reply', id, value })
 }
 
 async function start(msg: InitMsg): Promise<void> {

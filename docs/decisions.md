@@ -1204,3 +1204,17 @@ if (isDev) logger.debug('scroll', { y })
 - A file without records has nothing to export or upload. Since segments open at the first write (#064), such an orphan exists only when a tab died between writing the header and the first batch.
 - Running retention inside the ordered handling would hold back every write while it lists directories and scans orphans. It touches other files, so there is no conflict to order.
 - Scheduling on the main thread keeps one place for the idle rule that upload (#049) will share.
+
+## 079. Upload details settled in implementation (2026-11-01)
+
+**Decision:**
+- The main thread takes the upload lock (`ifAvailable`, #022) and calls `send()` (#007). For each segment it asks the worker, in order: the list of `pending/` names (oldest first, #047), the converted file, then "move to `done/`" after `send()` resolves. The worker does these steps beside its writes, as with retention (#078); they touch only `pending/` and `done/`.
+- The worker builds the file from the segment's good lines (cut at the first bad line, #016), adds `tab`, `seq`, and `context` (#033), and computes `sha256` with `crypto.subtle` over exactly those bytes (#048). `from` and `to` come from the records (#067).
+- The upload loop starts right after the first retention run reports back (#053), then runs every `upload.intervalMs`. Retention keeps its own 1-minute timer. A run is skipped while the previous one in the same tab is still going.
+- A `pending/` file in a newer format (#013) is skipped and reported as `unreadable-file` once per file per page load, not on every run.
+- After `close()`, an upload run in progress stops at its next step. A segment whose `send()` resolved but was not yet moved to `done/` is sent again later (#007 at-least-once).
+- Invalid `upload` options (no `send` function, non-positive `intervalMs` or `timeoutMs`) report `invalid-option` (#073).
+
+**Why:**
+- Functions cannot cross to the worker, so `send()` and therefore the lock live on the main thread. Reading, converting, and hashing a 2MB segment stay off the main thread.
+- One report per file keeps a newer tab's files from producing an error every minute in an error tracker.

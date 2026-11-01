@@ -38,6 +38,13 @@ export type ToWorker =
   | { type: 'close' }
   /** Run retention if no other tab is running it (#022, #053). */
   | { type: 'maintain' }
+  /** Upload steps, asked by the main thread while it holds the upload lock (#007). */
+  | { type: 'call'; id: number; call: WorkerCall }
+
+export type WorkerCall =
+  | { op: 'list-pending' }
+  | { op: 'prepare'; name: string }
+  | { op: 'mark-done'; name: string }
 
 export type FromWorker =
   | { type: 'ready' }
@@ -46,5 +53,7 @@ export type FromWorker =
   | { type: 'closed' }
   /** A maintenance run ended; `ran` is false when another tab held the lock. */
   | { type: 'maintained'; ran: boolean; dropped?: RetentionDrops }
+  /** Answer to a `call`: string[] for list-pending, Prepared for prepare, boolean for mark-done. */
+  | { type: 'reply'; id: number; value: unknown }
   /** Storage could not start (#041). */
   | { type: 'fatal'; code: 'opfs-unavailable'; name: string; message: string }

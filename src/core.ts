@@ -2,8 +2,9 @@
 
 import { mergeContext, serializeContext, type Context } from './context'
 import { ErrorReporter, OpfslogdError, type OpfslogdErrorCode } from './errors'
-import { isValidNamespace, newTabId } from './names'
-import type { FromWorker, ToWorker } from './protocol'
+import { isValidNamespace, lockNames, newTabId } from './names'
+import type { FromWorker, ToWorker, WorkerCall } from './protocol'
+import type { Prepared, UploadMeta } from './upload-worker'
 import { RecordQueue, type WriteFailReason } from './queue'
 import { serializeRecord, type Level } from './record'
 
@@ -24,8 +25,29 @@ const DEFAULT_RETENTION_MAX_AGE_MS = 7 * 86_400_000 // #051
 const MAINTAIN_INTERVAL_MS = 60_000
 /** Fallback wait where requestIdleCallback is missing (Safari) (#049). */
 const IDLE_FALLBACK_MS = 1_000
+const DEFAULT_UPLOAD_INTERVAL_MS = 60_000 // #049
+const DEFAULT_UPLOAD_TIMEOUT_MS = 60_000 // #045
 const DEFAULT_NAMESPACE = 'default'
 const OPFS_ROOT = 'opfslogd'
+
+/** Second argument of `send()` (#048). */
+export interface SendMeta extends UploadMeta {
+  /** Aborted after `upload.timeoutMs`; pass it to fetch() (#045). */
+  signal: AbortSignal
+}
+
+export interface UploadOptions {
+  /**
+   * Sends one closed segment: `file` is JSON Lines (application/x-ndjson) in the exported
+   * shape. Resolve when the backend has it; reject to retry on the next run. Delivery is
+   * at least once: dedupe on `meta.segmentId`. (#007, #045 - #048)
+   */
+  send: (file: Blob, meta: SendMeta) => Promise<unknown>
+  /** Time between upload runs. Default 1 minute. (#049) */
+  intervalMs?: number
+  /** Abort `meta.signal` and count the attempt as failed after this long. Default 1 minute. (#045) */
+  timeoutMs?: number
+}
 
 export interface InitOptions {
   /**
@@ -49,6 +71,11 @@ export interface InitOptions {
     /** Delete closed segments whose last record is older than this. Default 7 days. (#050, #051) */
     maxAgeMs?: number
   }
+  /**
+   * Upload closed segments with your own `send()`. Without it, closed segments are kept
+   * locally only; segments closed while it is not set are never uploaded later (#068).
+   */
+  upload?: UploadOptions
   /** Internal problems. Without it, each code is printed once with console.error (#040). */
   onError?: (err: OpfslogdError) => void
 }
@@ -104,6 +131,14 @@ export class Core {
   private closing: Promise<void> | undefined
   private onWorkerClosed: (() => void) | undefined
 
+  private namespace = DEFAULT_NAMESPACE
+  private upload: Required<UploadOptions> | undefined
+  private uploadTimer: ReturnType<typeof setTimeout> | undefined
+  private uploadStarted = false
+  private uploading = false
+  private readonly unreadableReported = new Set<string>()
+  private readonly calls = new Map<number, (value: unknown) => void>()
+  private nextCallId = 1
   private maintainTimer: ReturnType<typeof setTimeout> | undefined
   private cancelIdle: (() => void) | undefined
   private flushTimer: ReturnType<typeof setTimeout> | undefined
@@ -186,15 +221,26 @@ export class Core {
     const maxAgeMs = options.rotate?.maxAgeMs ?? DEFAULT_ROTATE_MAX_AGE_MS
     const retentionMaxBytes = options.retention?.maxBytes ?? DEFAULT_RETENTION_MAX_BYTES
     const retentionMaxAgeMs = options.retention?.maxAgeMs ?? DEFAULT_RETENTION_MAX_AGE_MS
+    const upload = options.upload
+    if (upload !== undefined && (typeof upload !== 'object' || upload === null || typeof upload.send !== 'function')) {
+      return this.fail('invalid-option', 'upload.send must be a function')
+    }
+    const uploadIntervalMs = upload?.intervalMs ?? DEFAULT_UPLOAD_INTERVAL_MS
+    const uploadTimeoutMs = upload?.timeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS
     for (const [name, value] of [
       ['rotate.maxAgeMs', maxAgeMs],
       ['retention.maxBytes', retentionMaxBytes],
       ['retention.maxAgeMs', retentionMaxAgeMs],
+      ['upload.intervalMs', uploadIntervalMs],
+      ['upload.timeoutMs', uploadTimeoutMs],
     ] as const) {
       if (typeof value !== 'number' || !(value > 0)) {
         return this.fail('invalid-option', `${name} must be a positive number, got ${String(value)}`)
       }
     }
+    this.namespace = namespace
+    this.upload = upload ? { send: upload.send, intervalMs: uploadIntervalMs, timeoutMs: uploadTimeoutMs } : undefined
+    this.uploadStarted = false
 
     // init({ context }) is setContext(context) at init time; its keys win (#032).
     this.context = mergeContext(this.context, options.context)
@@ -226,7 +272,7 @@ export class Core {
       context: this.contextJson,
       rotateMaxAgeMs: maxAgeMs,
       rotateMaxBytes: ROTATE_MAX_BYTES,
-      upload: false,
+      upload: this.upload !== undefined,
       retentionMaxBytes,
       retentionMaxAgeMs,
       root: OPFS_ROOT,
@@ -316,6 +362,15 @@ export class Core {
           this.queue.addRetention(segments, bytes, from, to)
           this.startFlushTimer()
         }
+        // The first upload run follows the first retention run (#053).
+        if (this.upload && !this.uploadStarted) {
+          this.uploadStarted = true
+          void this.uploadLoop()
+        }
+        return
+      case 'reply':
+        this.calls.get(msg.id)?.(msg.value)
+        this.calls.delete(msg.id)
         return
       case 'closed':
         this.onWorkerClosed?.()
@@ -404,6 +459,57 @@ export class Core {
     const onLoad = (): void => whenIdle()
     window.addEventListener('load', onLoad, { once: true })
     this.cancelIdle = () => window.removeEventListener('load', onLoad)
+  }
+
+  private async uploadLoop(): Promise<void> {
+    await this.uploadRun()
+    if (this.state === 'open' && this.upload) {
+      this.uploadTimer = setTimeout(() => void this.uploadLoop(), this.upload.intervalMs)
+    }
+  }
+
+  /**
+   * One upload run in the tab that gets the upload lock (#022): pending segments oldest
+   * first, one at a time, stopping at the first failure (#046, #047).
+   */
+  private async uploadRun(): Promise<void> {
+    const upload = this.upload
+    if (!upload || this.uploading || this.state !== 'open') return
+    this.uploading = true
+    try {
+      await navigator.locks.request(lockNames(this.namespace).upload, { ifAvailable: true }, async (lock) => {
+        if (!lock) return
+        const names = (await this.call({ op: 'list-pending' })) as string[] | undefined
+        for (const name of names ?? []) {
+          if (this.state !== 'open') return
+          const prepared = (await this.call({ op: 'prepare', name })) as Prepared | undefined
+          if (!prepared || prepared.kind === 'skip') continue
+          if (prepared.kind === 'unreadable') {
+            if (!this.unreadableReported.has(name)) {
+              this.unreadableReported.add(name)
+              this.reporter.report(new OpfslogdError('unreadable-file', `skipped ${name}: written by a newer version`))
+            }
+            continue
+          }
+          if (!(await sendOnce(upload, prepared.file, prepared.meta))) return
+          await this.call({ op: 'mark-done', name })
+        }
+      })
+    } catch {
+      // the run ends; the next one retries (#046)
+    } finally {
+      this.uploading = false
+    }
+  }
+
+  /** Asks the worker for one upload step; resolves undefined if the logger closes first. */
+  private call(call: WorkerCall): Promise<unknown> {
+    if (!this.worker) return Promise.resolve(undefined)
+    const id = this.nextCallId++
+    return new Promise((resolve) => {
+      this.calls.set(id, resolve)
+      this.post({ type: 'call', id, call })
+    })
   }
 
   /** Adds a subscriber; returns a function that removes it, safe to call twice (#043). */
@@ -518,6 +624,11 @@ export class Core {
     this.watchdog = undefined
     clearTimeout(this.maintainTimer)
     this.maintainTimer = undefined
+    clearTimeout(this.uploadTimer)
+    this.uploadTimer = undefined
+    this.upload = undefined
+    for (const resolve of this.calls.values()) resolve(undefined)
+    this.calls.clear()
     this.cancelIdle?.()
     this.cancelIdle = undefined
     this.errorFlushPending = false
@@ -546,4 +657,28 @@ export class Core {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Calls send() once with a timeout (#045). True when it resolved in time. A late result
+ * is ignored; a late success means the segment is sent again later (at least once, #007).
+ */
+async function sendOnce(upload: Required<UploadOptions>, file: Blob, meta: UploadMeta): Promise<boolean> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<false>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new DOMException('upload.timeoutMs passed', 'TimeoutError'))
+      resolve(false)
+    }, upload.timeoutMs)
+  })
+  try {
+    const sent = (async (): Promise<true> => {
+      await upload.send(file, { ...meta, signal: controller.signal })
+      return true
+    })()
+    return await Promise.race([sent.catch(() => false as const), timedOut])
+  } finally {
+    clearTimeout(timer)
+  }
 }
