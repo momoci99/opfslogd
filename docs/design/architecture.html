@@ -132,7 +132,7 @@
   <text x="48" y="328" class="small">{ts}_{tab2}.seg</text>
   <rect x="190" y="268" width="140" height="96" rx="6" class="box warn"/>
   <text x="202" y="290" font-size="13">pending/</text>
-  <text x="202" y="310" class="small">봉인됨, 업로드 대기</text>
+  <text x="202" y="310" class="small">닫힘, 업로드 대기</text>
   <rect x="344" y="268" width="130" height="96" rx="6" class="box"/>
   <text x="356" y="290" font-size="13">done/</text>
   <text x="356" y="310" class="small">업로드 완료</text>
@@ -158,8 +158,8 @@
   <li><code>log()</code>는 레코드를 JSON 문자열로 만들어 메인 스레드의 문자열 큐에 넣습니다(#014, #015). <code>postMessage</code>는 매번 하지 않습니다.</li>
   <li>버퍼가 찼거나 flush 주기가 되면 레코드를 하나의 <code>ArrayBuffer</code>로 묶어 Worker에 <strong>transfer</strong>합니다(복사 없음).</li>
   <li>Worker는 sync handle로 자기 <code>active</code> 세그먼트에 덧붙입니다.</li>
-  <li>세그먼트가 상한 크기(기본 8MB)에 도달하거나, 열린 지 일정 시간(초안 5분)이 지났고 비어 있지 않으면 봉인하고 <code>pending/</code> 또는 <code>done/</code>으로 옮깁니다(#021). 오래 열어 둔 탭의 로그도 업로드 주기에 맞춰 올라가게 하려는 것입니다.</li>
-  <li>탭이 닫힐 때는 봉인하지 않습니다. 탭의 Lock이 풀리면 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 봉인합니다(#012, #020).</li>
+  <li>세그먼트가 상한 크기(기본 8MB)에 도달하거나, 열린 지 일정 시간(초안 5분)이 지났고 비어 있지 않으면 로테이션합니다: 지금 파일을 닫아 <code>pending/</code> 또는 <code>done/</code>으로 옮기고 새 파일을 엽니다(#021). 오래 열어 둔 탭의 로그도 업로드 주기에 맞춰 올라가게 하려는 것입니다.</li>
+  <li>탭이 닫힐 때는 pending으로 옮기지 않습니다. 탭의 Lock이 풀리면 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 pending으로 옮깁니다(#012, #020).</li>
 </ol>
 
 <h3>읽기 경로 (내보내기, 쿼리)</h3>
@@ -185,7 +185,7 @@
 
   <rect x="230" y="50" width="160" height="56" rx="8" class="box warn"/>
   <text x="248" y="74" class="label">pending</text>
-  <text x="248" y="94" class="small">봉인, 업로드 대기</text>
+  <text x="248" y="94" class="small">닫힘, 업로드 대기</text>
 
   <rect x="460" y="50" width="140" height="56" rx="8" class="box"/>
   <text x="478" y="74" class="label">done</text>
@@ -195,7 +195,7 @@
   <text x="668" y="82" class="label">삭제</text>
 
   <path d="M160,78 L228,78" class="line" marker-end="url(#arr2)"/>
-  <text x="168" y="70" class="small">봉인</text>
+  <text x="168" y="70" class="small">닫기</text>
   <path d="M390,78 L458,78" class="line" marker-end="url(#arr2)"/>
   <text x="396" y="70" class="small">send() 성공</text>
   <path d="M600,78 L648,78" class="line" marker-end="url(#arr2)"/>

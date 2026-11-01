@@ -67,7 +67,7 @@ new SharedWorker(new URL('./worker.js', import.meta.url), { type: 'module', name
 
 **Decision:** The library does not speak any upload protocol. The user passes `upload.send(file, meta)`. When it resolves, the segment is marked uploaded. When it rejects, the segment stays pending and is retried. Only the tab that holds the `opfslogd:upload` Web Lock uploads.
 
-Segment lifecycle: `active` (being written) → `pending` (sealed, waiting for upload) → `done` (uploaded) → deleted by retention. Without `upload`, sealed segments go straight to `done`.
+Segment lifecycle: `active` (being written) → `pending` (closed, waiting for upload) → `done` (uploaded) → deleted by retention. Without `upload`, closed segments go straight to `done`.
 
 When the size limit is hit, `done` segments are deleted first, then the oldest `pending` segments (rolling). Dropped counts are recorded.
 
@@ -132,13 +132,13 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 ## 012. Segment file names carry the time range and tab ID (2026-10-29)
 
-**Decision:** An active segment is named `{startTs}_{tabId}.seg`. When sealed, it is renamed to `{startTs}_{endTs}_{tabId}.seg` as part of the same `move()` that changes its state directory. Timestamps are zero-padded to 13 digits. The format version is not in the name; it is in the file header.
+**Decision:** An active segment is named `{startTs}_{tabId}.seg`. When it is moved out of `active/`, it is renamed to `{startTs}_{endTs}_{tabId}.seg` as part of the same `move()` that changes its state directory. Timestamps are zero-padded to 13 digits. The format version is not in the name; it is in the file header.
 
 **Why:**
 - Queries and retention can pick files by name without opening them.
 - Zero-padding makes lexical order equal time order.
-- Sealing already moves the file, so the rename is free.
-- Each worker holds the Web Lock `opfslogd:tab:{tabId}` while alive. Files in `active/` whose lock is gone (checked with `navigator.locks.query()`) belong to a crashed tab; the retention holder recovers and seals them.
+- Leaving `active/` already moves the file, so the rename is free.
+- Each worker holds the Web Lock `opfslogd:tab:{tabId}` while alive. Files in `active/` whose lock is gone (checked with `navigator.locks.query()`) belong to a crashed tab; the retention holder recovers them and moves them to `pending/`.
 
 ## 013. Format versioning: reader/writer versions, extensible headers, fixed file names (2026-10-29)
 
@@ -208,7 +208,7 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 - Without frames, the main thread sends bytes and the worker appends them. There are no per-flush tallies to pass, no header space to reserve, no CRC to compute, and no header byte layout to design.
 
 **Trade-offs:**
-- Corruption that still parses as valid JSON is not detected. After sealing, upload's `sha256` (#007) covers the file.
+- Corruption that still parses as valid JSON is not detected. Once the segment is closed, upload's `sha256` (#007) covers the file.
 - Queries scan every line of a segment instead of skipping frames. Estimated tens of ms per 8MB segment, to be benchmarked. Queries are rare and off the write path.
 - Per-flush compression or encryption would need frames again. That would be a new format version under #013, and the v1 reader stays.
 
@@ -272,31 +272,33 @@ At the next flush, if any counter is above zero, the library appends one record 
 
 **Rejected:** four steps (50/75/90/100%), which added numbers to tune with no prior art; no cap, which risks crashing the tab.
 
-## 020. On hide and close, flush only; sealing is left to orphan recovery (2026-11-01)
+## 020. On hide and close, flush only; moving the segment to `pending/` is left to orphan recovery (2026-11-01)
 
 **Decision:**
 - `visibilitychange` to `hidden`: flush at once.
 - `pagehide`: flush at once, best effort.
-- Neither event seals the segment. When the tab goes away, its `opfslogd:tab:{tabId}` lock is released and the retention holder recovers and seals the orphaned `active/` file (#012). A normal close and a crash take the same path.
+- Neither event moves the segment to `pending/`. When the tab goes away, its `opfslogd:tab:{tabId}` lock is released and the retention holder recovers the orphaned `active/` file and moves it to `pending/` (#012). A normal close and a crash take the same path.
 - While hidden, timers are throttled (about 1s, and up to 1 minute in Chrome after a long time hidden). `log()` therefore also flushes when the oldest queued record is older than the flush interval. Records logged last, with no later `log()` call, still wait for the delayed timer.
 
 **Why:**
 - On mobile, a backgrounded page is often killed by the OS with no `pagehide`. `hidden` is the last event that reliably arrives while the page and its worker are still running (Chrome's Page Lifecycle guidance says the same).
 - During `pagehide` the document and its dedicated worker are being torn down, so a posted message may never be written.
-- Sealing closes the handle and calls `move()` asynchronously in the worker. It may not finish while the page is torn down, and orphan recovery already covers the case. Doing it on close adds an unreliable step that duplicates an existing path.
-- Sealing on every `hidden` would create many tiny segments for users who switch tabs often.
+- Moving to `pending/` closes the handle and calls `move()` asynchronously in the worker. It may not finish while the page is torn down, and orphan recovery already covers the case. Doing it on close adds an unreliable step that duplicates an existing path.
+- Rotating on every `hidden` would create many tiny segments for users who switch tabs often.
 
 **To verify:** whether a page holding a Web Lock or a sync access handle can enter the back/forward cache, and what happens to its worker if it does.
 
-## 021. Seal active segments by age as well as size; the age is a public option (2026-11-01)
+## 021. Rotate active segments by age as well as size; the age is a public option (2026-11-01)
 
-**Decision:** The worker seals its active segment and opens a new one when the segment reaches the size limit (default 8MB) **or** has been open for a set time (draft default 5 minutes) and is not empty. This applies whether or not `upload` is configured. The age is a public option; its name and place are decided with the public API (step 5).
+> **Amended by #054 (2026-11-01).** Export also reads the calling tab's active segment.
+
+**Decision:** The worker rotates (moves its active segment to `pending/` and opens a new one) when the segment reaches the size limit (default 8MB) **or** has been open for a set time (draft default 5 minutes) and is not empty. This applies whether or not `upload` is configured. The age is a public option; its name and place are decided with the public API (step 5).
 
 **Why:**
-- Only sealed segments in `pending/` are uploaded. With size-only sealing, a long-lived tab writing 1MB per hour would upload once every 8 hours, even with `upload.intervalMs` set to one minute.
-- Since #020, closing a tab no longer seals. Sealing on close never helped long-lived tabs anyway.
-- Sealing by age is an ordinary worker action on its own file, so it has none of the teardown problems of sealing on close.
-- One rule with or without upload keeps behavior simple. Sealed files also keep export and query away from files still being written.
+- Only segments in `pending/` are uploaded. With size-only rotation, a long-lived tab writing 1MB per hour would upload once every 8 hours, even with `upload.intervalMs` set to one minute.
+- Since #020, closing a tab no longer moves the segment to `pending/`. Doing so on close never helped long-lived tabs anyway.
+- Rotating by age is an ordinary worker action on its own file, so it has none of the teardown problems of doing it on close.
+- One rule with or without upload keeps behavior simple. Closed files also keep export and query away from files still being written.
 - At 5 minutes there are at most 288 segments per tab per day. Retention deletes whole files, so more files do not change how it works.
 
 **Open:** 5 minutes has no basis beyond being longer than the default upload interval (1 minute) while keeping the file count moderate.
@@ -331,3 +333,541 @@ At the next flush, if any counter is above zero, the library appends one record 
 - Waiting for the worker ack would add latency and tie subscriber delivery to ack handling, for a guarantee ("it is on disk") that a live viewer does not need.
 - A delay of up to one flush interval is not noticeable in a viewer, and it shrinks if the benchmark picks a shorter interval (#017).
 - Users could wrap the logger themselves, but the library can deliver exactly what was stored, including drop lines.
+
+## 024. `log` calls take the message first, then an optional context object (2026-11-01)
+
+**Decision:** Each level method takes `(msg, ctx?)`:
+
+```ts
+logger.info('upload done', { fileId: 'a1', ms: 320 })
+logger.warn('slow response')
+```
+
+`msg` is a string and `ctx` is one optional object. They map to the stored `msg` and `ctx` fields (#011) as they are. How the logger object is obtained, and how an `Error` is passed, are decided separately (step 5).
+
+**Why:**
+- It matches the record schema (#011) one to one: one message string, one context object.
+- Message first is the most common order in JS loggers (winston and most others) and reads naturally.
+
+**Rejected:**
+- Object first, `info(ctx, msg)` (pino, bunyan). pino puts the object first because it supports printf-style formatting in the message arguments. opfslogd does no formatting, so the order only adds confusion.
+- `console`-style variable arguments, `info('a', obj, 123)` (loglevel, consola). Easy to swap for `console`, but the line between message and context is unclear. The whole argument list would have to be stored, and queries could no longer rely on `msg` and `ctx`.
+
+## 025. Errors are passed as `ctx.err`, or as `ctx` itself (2026-11-01)
+
+**Decision:** The documented way to log an error is the `err` key of `ctx`:
+
+```ts
+try { ... } catch (e) {
+  logger.error('upload failed', { err: e, fileId })
+}
+```
+
+- If `ctx.err` is an `Error`, it is stored in the record's `err` field (`name`, `message`, `stack`, #011) and left out of `ctx`. The user's object is not changed.
+- If `ctx` itself is an `Error` (`logger.error('upload failed', e)`), it is stored in `err` and the record has no `ctx`.
+- If `ctx.err` is not an `Error` (for example `throw 'text'`), it stays in `ctx` as an ordinary value.
+- This works on every level, not only `error`.
+- An `Error` deeper inside `ctx` (`{ last: { error: e } }`) is not converted and is stored as `{}`. The docs tell users to put errors in `err` or pass them as `ctx`.
+
+**Why:**
+- It keeps the `(msg, ctx?)` shape of #024.
+- With strict TypeScript, a `catch` variable is `unknown`. `{ err: e }` fits a `Record<string, unknown>` context with no cast.
+- `logger.error('x', e)` is common in JavaScript. Without the second rule, the error would be stored as `{}` and its content lost with no warning. The check is one `instanceof`.
+
+**Rejected:**
+- A third argument, `error(msg, err, ctx?)`. It breaks #024 and gives the second argument a different meaning on different levels.
+- Converting errors at any depth with a `JSON.stringify` replacer. A replacer takes V8 off its fast stringify path and calls a JS function for every key, on every `log()`, for a rare case. The cost estimate in #014 assumes no replacer.
+- Scanning only the top-level values of `ctx`. It costs a key loop on every call and still misses deeper errors, so the rule gets harder to explain.
+
+## 026. `err` stores the `cause` chain, up to depth 5 (2026-11-01)
+
+**Decision:** When an `Error` is stored in `err` (#025), its `cause` is stored too, in the same shape, recursively:
+
+```json
+"err": {"name":"Error","message":"upload failed","stack":"...",
+        "cause": {"name":"TypeError","message":"Failed to fetch","stack":"..."}}
+```
+
+- At most 5 levels of `cause` are stored. Deeper causes are dropped.
+- A cycle (a cause that points back to an error already in the chain) ends the chain.
+- A `cause` that is not an `Error` (a string, an object) is stored as an ordinary value. If it cannot be serialized, it is replaced as in #011.
+
+**Why:**
+- Wrapping errors with `new Error(msg, { cause })` (ES2022) is common, and the root cause is usually in the inner error. Chrome's `stack` does not include the cause, so without this the root cause is lost.
+- The cost applies only to records that carry an `Error`, not to the ordinary `log()` path.
+- Prior art: pino's default error serializer serializes `cause` recursively. Sentry's LinkedErrors integration collects the cause chain with a default limit of 5. Node's `util.inspect` prints `cause`.
+
+## 027. `err` also stores the error's own enumerable properties (2026-11-01)
+
+**Decision:** When an `Error` is stored in `err` (#025, and each level of `cause` in #026), its own enumerable properties (`Object.keys`) are copied into the same object, next to `name`, `message`, `stack`, and `cause`. If a property has the same name as one of those four, the fixed field wins. Values are handled like `ctx` values: if one cannot be serialized, it is replaced as in #011.
+
+```json
+"err": {"name":"HttpError","message":"bad","stack":"...","status":503,"code":"UPSTREAM_DOWN"}
+```
+
+**Why:**
+- App error classes often carry the fact that matters (`status`, `code`) as properties. Without this they are lost.
+- The cost applies only to records that carry an `Error`.
+- Prior art: pino's default error serializer copies all enumerable properties. Node's `util.inspect` shows them.
+
+**Not covered:** `DOMException.code` is a getter on the prototype, so it is not copied; `name` (for example `QuotaExceededError`) carries the same information. `AggregateError.errors` is not enumerable and is not stored for now.
+
+## 028. The logger is a module singleton set up by `init()`; records logged before `init()` wait in the queue (2026-11-01)
+
+**Decision:** The package exports one logger and an `init()` function. Any module can import the logger and log; the app calls `init()` once, at its entry point.
+
+```ts
+// main.ts
+import { init } from 'opfslogd'
+init({ upload: { send } })
+
+// anywhere
+import { logger } from 'opfslogd'
+logger.info('clicked', { id })
+```
+
+Records logged before `init()` are serialized and queued as usual (#014, #015). Flushes wait until `init()` has started the worker. The buffer cap and rejection rules (#019) apply as usual, so if `init()` is never called, the queue fills to the cap and later records are rejected. Export names (`logger`, `init`) are drafts.
+
+**Why:**
+- The goal is an API users can use without thinking. Call sites import from the package directly; there is no logger module for the app to create and place, and no way to create several by mistake.
+- There is one worker per tab (#006), so the logger is a single object anyway.
+- The usual cost of a singleton is the "used before init" state. Here it is almost free: the queue exists without a worker, so the only addition is "do not flush while there is no worker".
+- Packages used by the app can log to the same logger.
+- Prior art: browser SDKs that collect logs or events are singletons set up by `init()` (Datadog Browser Logs, Sentry, PostHog, Amplitude, LogRocket, Bugsnag). Datadog, PostHog, Amplitude, and Google Analytics' `dataLayer` queue calls made before setup. Factory-only loggers (pino, bunyan) are server loggers, where one process may need several outputs.
+
+**Rejected:** a factory, `createLogger(options)`. It needs the app to own a logger module, and it removes nothing this design needs. A factory for several instances can be added later without breaking this API.
+
+**Trade-off:** tests share global state and need a way to reset it (`close()`, decided next).
+
+## 029. A second `init()` call is ignored with one console warning (2026-11-01)
+
+**Decision:** Once `init()` has run, later calls do nothing. The options of the first call stay in effect. The library prints one `console.warn` saying that `init()` was already called and that changed options take effect after a page reload.
+
+**Why:**
+- Repeated `init()` is common and usually harmless: HMR re-running the entry module (Vite, webpack), React StrictMode, or `init()` placed inside a component.
+- Throwing would break the page on every HMR update.
+- Restarting with the new options would restart the worker: a new tab ID and tab lock, the old active segment left as an orphan, and queued records to carry over. An HMR update is not worth that cost.
+- Prior art: Datadog Browser Logs warns and ignores a second `init()`. Sentry replaces its client, which suits it because it holds no files or locks.
+
+**Trade-off:** during development, changed `init()` options need a reload. The warning says so.
+
+## 030. `close()` flushes, moves the segment to `pending/`, and stops; later `log()` calls are discarded (2026-11-01)
+
+**Decision:** `close(): Promise<void>` does the following, in order:
+1. Flush the queue and wait for the worker's ack (#018).
+2. Move the active segment to `pending/`. No new segment is opened.
+3. Release the locks and terminate the worker.
+
+After `close()`, `log()` calls are discarded: nothing is queued, and no drop line (#019) is written, because the stop is intended. `log()` still never throws (#011). The first discarded call after each `close()` prints one `console.warn` saying that logging has stopped. The warning is printed in every environment, with no development-only check, the same rule as #029. A later `init()` is a normal start, not a second call under #029.
+
+States: before `init()` (records are queued, #028) → running → closed (records are discarded) → `init()` → running.
+
+**Why:**
+- Uses: resetting global state in tests (#028), and stopping logging on logout or when the user withdraws consent.
+- Going back to the before-`init()` state would keep queuing records from the app and third-party packages after a consent withdrawal, and a later `init()` would write them. Logs from a period the user refused would be stored.
+- Logging after `close()` is like using a released resource, so the developer should hear about it. It is not an error to throw, though: the logger is shared, and other code (including third-party packages) cannot know it was closed.
+- Warnings in every environment, not development only:
+  - Detecting development needs `process.env.NODE_ENV`. AGENTS.md bans `process` in `src/`. Only some bundlers replace it (not Rollup without a plugin, not CDN or unbundled use). The common guard `typeof process !== 'undefined' && ...` silences the warning in Vite and webpack 5 builds, because they replace `process.env.NODE_ENV` but provide no `process`. `import.meta.env.DEV` is Vite-only.
+  - An opt-in `debug` option would hide the warning from the developers who need it.
+  - The production cost is one console line, only after misuse.
+  - Switching to development-only warnings later changes only console output, not the API. Do it if users ask.
+- Moving the segment here does not conflict with #020. #020 avoids it while the page is being torn down, when the async steps may not finish. `close()` is awaited while the worker is still running.
+
+## 031. Global context can change at runtime; a change starts a new segment (2026-11-01)
+
+**Decision:** The global context is set at `init()` and can be changed while running (API shape decided separately). It is serialized when it is set, like a record (#014). When it changes:
+1. The main thread flushes its queue, then sends the new context to the worker.
+2. The worker rotates: it moves the active segment to `pending/` and opens a new one whose header line carries the new context. If the active segment holds no records yet, the worker rewrites its header line instead.
+
+Messages keep their order, so records logged before the change carry the old context and records logged after it carry the new one. `seq` continues across segments as usual (#016).
+
+**Why:**
+- The main use of global context in browser SDKs is the user ID, which is known only after login and removed at logout. Sentry (`setUser`, `setTag`), Datadog (`setUser`, `setGlobalContextProperty`), and LogRocket (`identify`) all allow runtime changes. Fixed values (`version`, `env`) fit too, as an initial value.
+- The context lives in the segment header (#011). Rotation already exists (#021), so a change needs no new mechanism.
+- Changes are rare (login, logout, plan or language change), so the extra segments cost little. Values that change per request belong in the record `ctx`; the docs say so.
+
+**Rejected:**
+- Fixed at `init()` only. It cannot hold a user ID set after login.
+- A special context line inside the segment. It breaks two rules of #016: every line starts with `ts` and `lv`, and `seq` is the line index.
+- Copying the context into every record. It brings back the bytes #011 saves.
+
+**Not now:** scoped context (`logger.child({ module })` in pino, winston, bunyan). It is a separate feature and can be added later.
+
+## 032. `setContext(partial)` shallow-merges; `undefined` removes a key (2026-11-01)
+
+**Decision:** The global context is changed with one function:
+
+```ts
+init({ context: { version: '2.3.1', env: 'prod' } })
+setContext({ userId: 'u42' })        // login  -> { version, env, userId }
+setContext({ userId: undefined })    // logout -> { version, env }
+```
+
+- Top-level keys are merged into the current context. Nested objects are replaced, not merged.
+- A key whose value is `undefined` is removed.
+- If the merged result serializes to the same string as before, nothing happens and no new segment starts (#031).
+- `init({ context })` works like a `setContext(context)` call at `init()` time. A `setContext()` before `init()` is kept, and `init()`'s keys win on conflict.
+- `close()` clears the context, so a later `init()` starts clean (#030).
+
+**Why:**
+- Replacing the whole object would make `setContext({ userId })` at login silently drop `version` and `env`. Merging avoids that trap.
+- One function instead of Datadog's `setGlobalContextProperty` / `removeGlobalContextProperty` pair. Several keys changed in one call cause only one segment change.
+- Shallow merge only, so the rule stays easy to predict.
+- Comparing the serialized result keeps repeated calls with the same value from creating segments.
+
+## 033. Exported lines carry the global context nested under `context` (2026-11-01)
+
+**Decision:** Export and upload add the global context to each line as one nested object named `context`, next to `tab` and `seq`:
+
+```json
+{"ts":1793251200123,"lv":"info","msg":"clicked","ctx":{"id":7},"tab":"k3f9","seq":0,"context":{"userId":"u42","version":"2.3.1"}}
+```
+
+The name is provisional and may be revisited before `1.0`.
+
+**Why:**
+- Merging context keys into the top level (Datadog's way) lets them collide with reserved fields (`msg`, `seq`, ...), the same reason `ctx` is nested (#011).
+- Backends can tell global values from per-record values.
+- `context` matches the API (`init({ context })`, `setContext`).
+
+**Trade-off:** a line holds both `ctx` (per record) and `context` (global), which may confuse. `global` was the alternative name.
+
+## 034. `namespace` option separates apps on the same origin (2026-11-01)
+
+**Decision:** `init({ namespace })` (default `'default'`) selects the OPFS directory `opfslogd/{namespace}/` and prefixes every lock name:
+
+- `opfslogd:{namespace}:upload`
+- `opfslogd:{namespace}:retention`
+- `opfslogd:{namespace}:tab:{tabId}`
+
+This amends the lock names in #012 and #022. Segment file names (#012, #013) do not change. Allowed characters are decided at implementation (they must be safe as a directory name and in a lock name).
+
+**Why:**
+- OPFS and Web Locks are per origin. Two apps on one origin (`user.github.io/app1` and `/app2`, several apps under one company domain, micro frontends) would otherwise share one directory and one upload lock. App 1's `send()` would upload app 2's logs to app 1's backend, and both would share one retention budget. This happens silently and is close to a data leak.
+- Making later addition non-breaking would require the `opfslogd/default/` layout now anyway, so the option itself costs only one string.
+- With a default value, single-app users never need to set it.
+
+**Telling users about it:** the option's JSDoc (shown on hover in the IDE) and a README section ("several apps on one domain") describe the failure: without a namespace, one app uploads the other's logs to its own backend. There is no runtime detection or warning. Nothing reliably tells two apps apart: `location.pathname` changes with SPA routes, and the worker script URL changes with every hashed deploy. False warnings train developers to ignore warnings. Warning whenever `upload` is set with the default namespace would warn almost every single-app user.
+
+## 035. Of the internal defaults, only the segment age limit is a public option in v0.1 (2026-11-01)
+
+**Decision:** The segment age limit (#021, draft 5 minutes) is a public `init()` option. The buffer cap (#019), flush interval and flush size (#017), overload threshold (#019), and segment size limit (8MB) stay internal constants in v0.1.
+
+**Why:**
+- Removing a public option is a breaking change; turning an internal constant into an option later is not.
+- The flush interval, flush size, and overload threshold are to be set by benchmark. Users have little basis for changing them, and wrong values raise main-thread cost or loss.
+- The buffer cap may matter to memory-sensitive apps, but it is measured in UTF-16 units, which is awkward to explain. Open it if users ask.
+- The segment size limit interacts with retention and upload capacity; it is revisited with those options (step 5, units 9 and 10).
+- The segment age limit sets the longest delay before a record can be uploaded, and that requirement differs per app.
+
+## 036. The segment age option is `rotate.maxAgeMs` (2026-11-01)
+
+**Decision:** The segment age limit (#021, #035) is set with:
+
+```ts
+init({ rotate: { maxAgeMs: 300_000 } })
+```
+
+**Why:**
+- "Segment" is an internal term. The standard term for closing the current log file and starting a new one is rotation: logrotate (`daily`, `size`), winston-daily-rotate-file (`frequency`, `maxSize`), pino-roll (`frequency`, `size`).
+- A `rotate` group gives the segment size limit a place (`rotate.maxBytes`) if it is opened later (#035).
+- The `Ms` suffix matches `upload.intervalMs` (#007).
+- Not under `upload`: #021 applies the age limit with or without upload.
+
+## 037. Term change: "seal" is replaced by "rotate" and "move to `pending/`" (2026-11-01)
+
+**Decision:** The word "seal" (Korean docs: 봉인) is no longer used. Earlier records and design pages were reworded; their decisions did not change.
+
+- **Rotate:** close the active segment, move it to `pending/`, and open a new one. Used for the size and age limits (#021) and context changes (#031). Matches the public option `rotate` (#036).
+- **Move to `pending/`:** the same move without opening a new segment. Used by `close()` (#030) and orphan recovery (#012, #020).
+- **Closed segment:** any segment no longer in `active/`.
+
+Throughout, `pending/` means `done/` when `upload` is not configured (#007).
+
+**Why:** "Seal" was an internal word that did not match the public API and did not read naturally. Rotation is the standard term for log files (logrotate, winston-daily-rotate-file, pino-roll).
+
+## 038. `flush(timeoutMs?)` returns `Promise<boolean>` (2026-11-01)
+
+**Decision:** `flush(timeoutMs?: number): Promise<boolean>` sends the current queue to the worker. It resolves `true` once every record queued at the time of the call has been written (the worker's ack, #018), and `false` if that does not happen within `timeoutMs` (draft default 5 seconds). It never rejects.
+
+The same rule covers every state, with no special cases:
+- Before `init()`: the records wait for the worker. If `init()` runs and they are written within the timeout, `true`; otherwise `false`.
+- After `close()`: the queue is empty (#030), so `true` at once.
+
+**Why:**
+- Automatic flushes cover hide, `pagehide` (#020), and `close()`; export flushes on its own. A user-called `flush()` remains useful in tests and before an action that should wait until the log is on disk.
+- The ack mechanism already exists, so the cost is small.
+- Without a timeout, a dead or hung worker would leave `await flush()` waiting forever and stall app code.
+- Returning `false` instead of rejecting lets callers skip try/catch.
+- Prior art: Sentry `flush(timeout): Promise<boolean>`, pino `logger.flush(cb)`.
+
+## 039. No separate drop callback (2026-11-01)
+
+**Decision:** There is no `onDrop` callback. Dropped records reach the app in two existing ways: the drop line written at flush (#019), and `subscribe()`, which receives that line with its batch (#023).
+
+**Why:**
+- A callback would be a third path for the same information.
+- Apps rarely react to drops (lowering the log level, showing an indicator), and those that do can subscribe.
+- It can be added later without breaking the API.
+
+**Follow-up:** how subscribers recognize the drop line is settled in #044.
+
+## 040. Internal errors go to `init({ onError })` as `OpfslogdError` with a `code` (2026-11-01)
+
+**Decision:**
+
+```ts
+init({
+  onError(err) {        // err: OpfslogdError, extends Error
+    err.code            // 'opfs-unavailable' | 'worker-load-failed' | ...
+    err.cause           // the original error (a DOMException, ...)
+  },
+})
+```
+
+Draft codes:
+
+| Code | When |
+|---|---|
+| `opfs-unavailable` | OPFS cannot be used (old browser, some private modes) |
+| `worker-load-failed` | the worker file fails to load (wrong `workerUrl`, CSP) |
+| `quota-exceeded` | storage is full |
+| `worker-unresponsive` | acks stopped; the worker died or hung (#018) |
+| `unreadable-file` | a file in a newer format was skipped (#013) |
+
+- `send()` failures are not reported here. `send()` is the app's own function, and the library retries (#007).
+- Without `onError`, each code is printed once with `console.error`, in every environment (same rule as #029, #030). With `onError`, nothing is printed.
+- An exception thrown by `onError` is caught and ignored, like a throwing subscriber (#023).
+- Codes may be added in minor versions; handlers should allow unknown codes.
+
+**Why:**
+- Step 1 set "errors are reported only through a callback": the library never throws into app code.
+- Most apps forward these to an error tracker (Sentry and the like), which expects `Error` instances. `code` lets apps branch without matching `message` text, and `cause` keeps the original error.
+- Printing once by default keeps a failed setup (no OPFS, blocked worker) from going unnoticed while logs silently stop.
+
+## 041. When storage cannot start, the logger behaves as closed (2026-11-01)
+
+**Decision:** After `opfs-unavailable` or `worker-load-failed` (#040), the logger switches to the closed state of #030: `log()` checks the state and returns at once (no serialization, no timers, no queue), the queue built up before `init()` is discarded, and subscribers receive nothing. The "logging has stopped" warning of #030 is not printed, because `onError` or `console.error` already reported the cause. `flush()` returns `true` at once, as after `close()` (#038).
+
+This applies only to these two codes. `quota-exceeded` can recover once retention frees space, and `worker-unresponsive` can recover when acks resume; while acks are missing, #019 rejects records before serialization, so the cost stays small.
+
+**Principle:** a failed logger must not load the main thread or change how the app behaves.
+
+**Why:**
+- Continuing to serialize and flush with nowhere to write costs main-thread time for nothing.
+- Keeping subscribers alive (so an in-app debug panel still works) would keep that cost. Browsers without OPFS are rare, so this is not worth it.
+- It reuses an existing state instead of adding one.
+
+## 042. Subscribers receive parsed record objects in the exported shape (2026-11-01)
+
+**Decision:** At each flush, `subscribe()` callbacks receive an array of parsed objects, `LogRecord[]`, in the same shape as an exported line: `ts`, `lv`, `msg`, `ctx`, `err`, `tab`, `seq`, `context` (#033). The batch is parsed once per flush and the same array is passed to every subscriber. Records are not frozen; the docs say to treat them as read-only.
+
+```ts
+subscribe((records) => {
+  for (const r of records) panel.add(r.lv, r.msg, r.ctx)
+})
+```
+
+**Why:**
+- Debug panels, console output, and tests all need objects. Passing strings would make every user write the same parsing code.
+- The parse cost is paid only by apps that subscribe; with no subscribers it is zero (#023). This is the app's own choice, so it does not conflict with #041.
+- The same shape as export means what a panel shows matches the exported file.
+- `Object.freeze` on every record would add cost for all subscribers to guard against a rare mistake.
+
+**To verify:** parse cost per flush during a burst (about 20,000 records per flush at 100k/s).
+
+## 043. `subscribe(fn)` returns an unsubscribe function; its documented purpose is debugging (2026-11-01)
+
+**Decision:**
+
+```ts
+const off = subscribe((records) => { ... })
+off()
+
+// React
+useEffect(() => subscribe(fn), [])
+```
+
+- Calling the returned function more than once is safe.
+- Subscribing before `init()` is allowed; delivery starts with the first flush after `init()`.
+- `close()` removes all subscribers, as it clears the context (#032).
+- The JSDoc and README state the purpose: debugging and development (in-app debug panels, console output during development, tests). Shipping logs to a server is what `upload` is for.
+
+**Why:**
+- The main use is a debug panel, and the returned function fits React's `useEffect` cleanup directly.
+- `unsubscribe(fn)` cannot remove an inline arrow function. An `AbortSignal` option needs an `AbortController` even for the simple case.
+- Stating the purpose keeps `subscribe()` from being used as a production pipeline. It is a poor fit for one: delivery happens before the write and is lost on a crash, every flush pays a parse (#042), and there is no retry or backpressure.
+
+## 044. The drop line's `msg` and `ctx.reason` are a fixed, documented contract (2026-11-01)
+
+**Decision:** The drop line (#019) always has `msg` equal to `"opfslogd: records dropped"` and a `ctx.reason` field. Both are documented as stable. Subscribers and backends recognize the line by comparing with these values. No helper function and no extra marker field are added. This replaces the follow-up note in #039 ("without matching `msg` text").
+
+**Why:**
+- Backends, often not written in JS, must recognize the line too, so the `msg` text is a contract everywhere anyway. Stating it is what matters.
+- An `isDropRecord()` helper adds public API for a one-line comparison; it can be added later without breaking anything.
+- A marker field (e.g. `"src":"opfslogd"`) changes the stored schema (#011) when the library writes only one kind of line.
+
+## 045. `send()` gets `meta.signal` and is aborted after `upload.timeoutMs` (2026-11-01)
+
+**Decision:** `send(file, meta)` receives an `AbortSignal` as `meta.signal`. If `send()` has not settled within `upload.timeoutMs` (public option, draft default 60 seconds), the library aborts the signal, treats the attempt as failed, ends the run, and releases the upload lock (#022). The segment stays in `pending/`. If `send()` settles later, the result is ignored.
+
+```ts
+upload: {
+  async send(file, meta) {
+    await fetch(url, { method: 'PUT', body: file, signal: meta.signal })
+  },
+  timeoutMs: 60_000,
+}
+```
+
+**Why:**
+- A `send()` that never settles would hold the upload lock and stop uploads in every tab, the case #022 left open.
+- Passing the signal to `fetch` cancels the real request. A timeout alone would stop waiting while the request kept running.
+- A late success after the timeout means the segment is uploaded again on a later run. #007 already accepts at-least-once delivery and gives `segmentId` for dedupe.
+- The right limit depends on network and backend, so it is a public option. The default needs measurement: 8MB over a slow mobile link (about 1Mbps) takes about a minute.
+
+## 046. Failed uploads retry on the fixed interval; a run stops at its first failure (2026-11-01)
+
+**Decision:** No backoff. When `send()` rejects or times out (#045), the run ends at once and the remaining segments wait for the next `upload.intervalMs` run. The failed segment stays in `pending/` and is tried again then.
+
+**Why:**
+- Each client tries once per interval and stops at the first failure, so an outage does not raise the request rate above normal. The problem backoff solves, retrying harder as failures pile up, does not arise.
+- Backoff would need state shared across tabs, because the uploading tab changes from run to run (#022). That is a new shared store for little gain.
+- A backoff option can be added later without breaking the API.
+
+**Remaining risk:** when an outage ends, every client uploads its backlog at once.
+
+## 047. No limit on segments per upload run, for now (2026-11-01)
+
+**Decision:** A run uploads pending segments one at a time, oldest first, until it runs out or hits a failure (#046). There is no per-run limit. Revisit after load testing.
+
+**Why:**
+- One client sends one request at a time. The burst after an outage comes from all clients starting together, which happens every interval anyway.
+- There is no basis for a limit value yet.
+- A backend under load can answer with an error such as 429; the app's `send()` rejects, and the run stops (#046). The server already has a way to slow clients down.
+
+**To verify:** load test of the recovery burst (many clients, each with a backlog), and how long a run holds the upload lock.
+
+## 048. `send(file, meta)` arguments (2026-11-01)
+
+**Decision:**
+
+```ts
+send(file: Blob, meta: {
+  segmentId: string   // the pending file name without extension: "{startTs}_{endTs}_{tabId}"
+  sha256: string      // hex digest of file
+  size: number        // bytes of file
+  from: number        // ts of the first record
+  to: number          // ts of the last record
+  signal: AbortSignal // #045
+}): Promise<unknown>  // the resolved value is ignored
+```
+
+`file` is the segment converted to exported JSONL (#007, #033), as a `Blob` with type `application/x-ndjson`.
+
+**Why:**
+- A `Blob` goes straight into a `fetch` body. Apps that want compression can use `file.stream().pipeThrough(new CompressionStream('gzip'))`, in line with deferring compression in the library (#016). A string would copy up to 8MB.
+- The pending file name is already unique (it contains the tab ID) and does not change after the move to `pending/`, so it serves as the idempotency key with no new ID to create or store.
+- Left out: record count (the backend can count lines) and namespace (each app defines its own `send`). Fields can be added later without breaking the API.
+
+## 049. The first upload run happens soon after `init()`, once the page is idle (2026-11-01)
+
+**Decision:** `upload.intervalMs` defaults to 1 minute (draft, #021). The first run does not wait a full interval: after `init()`, the library waits for the `load` event and then `requestIdleCallback` (a short `setTimeout` where it is missing, as in Safari), runs once, and then runs every interval. The run still uses `ifAvailable` (#022), so with several tabs opening at once only one runs.
+
+**Why:**
+- With only the interval timer, nothing uploads until a minute after `init()`. Short sessions (a mobile user who opens the app for 30 seconds) would never upload, and the backlog from earlier sessions would keep waiting.
+- Running at `init()` would put segment conversion, sha256, and network requests on top of page load.
+- Retention has the same problem; whether it follows the same rule is decided with the retention options.
+
+## 050. Retention has a size limit and an age limit (2026-11-01)
+
+**Decision:** `retention.maxBytes` and `retention.maxAgeMs`. A retention run (#022):
+1. Deletes every closed segment whose end time (in its file name, #012) is older than `maxAgeMs`, whether `done` or `pending`.
+2. If the total is still above `maxBytes`, deletes `done` segments, then the oldest `pending` segments, as in #007.
+
+Deleted `pending` segments are reported with a drop line (#019) whose `ctx.reason` is `"retention"`; its other fields are decided at implementation (the count of records is not known without reading the file). Defaults are decided separately.
+
+**Why:**
+- Logs hold values such as user IDs (#031). An app that logs little never reaches the size limit, so without an age limit its logs would stay on the device forever. Keeping data no longer than needed is a basic privacy rule (GDPR storage limitation).
+- Local logs months old are rarely useful, even for bug reports.
+- The end time is in the file name, so the age check opens no files.
+- Unuploaded logs past the age limit are deleted too; the drop line records it. #019 left `reason` open for this use.
+
+## 051. `retention.maxAgeMs` defaults to 7 days (2026-11-01)
+
+**Decision:** The default age limit is 7 days.
+
+**Why:**
+- Tencent Mars xlog, a mobile log library used by WeChat, keeps logs 10 days by default (from secondary sources; the official source was not checked). Meituan Logan's default could not be confirmed.
+- Bug reports usually come within days of the problem.
+- Safari's ITP deletes all script-writable storage of a site the user has not interacted with for 7 days of Safari use. A WebKit maintainer said in Bugzilla 276998 that this covers OPFS, but no official document says so. A 7-day default stays within that limit either way. Users who visit regularly reset the counter, so a longer setting still works for them.
+- Apps that need longer can raise it.
+
+**Basis is weak:** no source gives a strong reason for 7 over 10 or 14. Revisit with field data.
+
+**To verify:** whether Safari's 7-day cap actually deletes OPFS data.
+
+## 052. `retention.maxBytes` defaults to 50MB (draft) and is a public option (2026-11-01)
+
+**Decision:** The size limit defaults to 50MB, counted as bytes of segment files on disk in the namespace. Apps change it with `init({ retention: { maxBytes } })`. Only closed segments are deleted (#050); active segments count toward the total but are never deleted by retention.
+
+**Basis:** none from other libraries; browser quotas (tens of percent of the disk) give no useful guide. At about 200 bytes per record (#017), one hour a day for 7 days is about 5MB at 1 record per second and 50MB at 10 per second. 50MB is a draft to revisit with field data.
+
+**Why a public option:** the right value depends on the app's log volume and on whether it uploads. With upload, the limit decides how many local copies of uploaded logs stay; without upload, it is the whole local log.
+
+## 053. Retention runs at the first idle point before upload, then every minute (internal) (2026-11-01)
+
+**Decision:** The first retention run happens at the same point as the first upload run (#049), and runs before it. After that it runs on an internal interval of 1 minute (the same as the default upload interval). The interval is not a public option. Apps without `upload` follow the same schedule.
+
+**Why:**
+- A retention run also recovers orphaned `active/` files (#012). Running it first lets files left by crashed or closed tabs of earlier sessions reach `pending/` and be uploaded in the same first pass.
+- A run is cheap: list directories, compare file names, one `navigator.locks.query()`.
+- Users have little reason to change the interval. It can be opened later without breaking the API (#035).
+
+## 054. Export includes closed segments and the calling tab's active segment (2026-11-01)
+
+**Decision:** Export reads every closed segment in the namespace and the calling tab's own active segment: its worker flushes, then reads the file through its own handle. Other tabs' active segments are left out, and the result says how many were left out. This amends #021's "sealed files keep export and query away from files still being written".
+
+**Why:**
+- The main use is a bug report sent from the tab where the problem happened. The most important records are that tab's last few minutes, which are still in its active segment.
+- Other tabs' records up to their last rotation (at most 5 minutes old by default) are included as closed segments.
+- Asking other tabs for their active data (BroadcastChannel) would add the tab-to-tab path #006 avoids, plus handling for tabs that do not answer (frozen tabs).
+
+**To verify:** whether another context can read a file while a tab holds a sync access handle on it (`getFile()`). If it can, other tabs' active segments can be added later without breaking the API.
+
+## 055. `exportLogs({ from?, to? })` returns `{ file, skipped }` (2026-11-01)
+
+**Decision:**
+
+```ts
+const { file, skipped } = await exportLogs({ from?: number, to?: number })
+// file: Blob (application/x-ndjson), lines in the exported shape (#033)
+// skipped: { activeOtherTabs: number, unreadable: number }
+```
+
+- The name is `exportLogs` because `export` is a reserved word.
+- `from` and `to` limit the time range. Files are picked by the times in their names (#012) and lines by their leading `ts` (#016), without JSON parsing.
+- `skipped.activeOtherTabs` counts other tabs' active segments left out (#054). `skipped.unreadable` counts files in a newer format (#013). These are information, not errors, so they are returned rather than sent to `onError`.
+- No level or text filters; that is query's job (step 5, unit 12).
+
+**Why:**
+- A `Blob` works directly with `URL.createObjectURL` for a download link or as a `fetch` body, and matches `send()`'s file (#048).
+- A bug report does not need the whole 50MB; a time range such as the last hour keeps it small, and the filter is cheap.
+
+## 056. Exported lines are merged in time order across tabs (2026-11-01)
+
+**Decision:** `exportLogs()` merges segments with a streaming k-way merge: one read position per open file, and the line with the earliest `ts` goes next. Files are opened in start-time order (#012) and only while their time range overlaps the output, so the number of open files is about the number of tabs that were open at the same time. `ts` is compared as the leading string of each line (#016), without parsing. Within one tab, lines always stay in `seq` order, even where the wall clock jumped back (#011).
+
+**Why:**
+- The main reader of an export is a person reading a bug report. Concatenating files in name order interleaves overlapping tabs in blocks, which is hard to read.
+- The merge streams; it never holds the whole export in memory, unlike sorting it all (up to 50MB of parsing).
+- Backends would re-sort anyway, but export is for people first. Upload sends one segment at a time and is not affected.
+
+## 057. No query API in v0.1 (2026-11-01)
+
+**Decision:** v0.1 has no `query()`. Searching stored logs by level, text, or tab is left out.
+
+**Why:**
+- The uses are covered: bug report files by `exportLogs({ from, to })` (#055), live debug panels by `subscribe()` (#042), server-side search by upload. An in-app view of past logs can parse the lines of a short `exportLogs()` range; it is a debugging use, so the cost is acceptable.
+- A query API brings filters, result limits, paging, and object results into the public API, and its shape is hard to change once published (#035). It should follow real requests.
+- The storage format already supports it (`ts` and `lv` at fixed positions, #016), so it can be added later without breaking anything. The segment scan benchmark (#016) stays, since export's time filter uses the same scan.

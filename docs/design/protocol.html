@@ -219,9 +219,9 @@ worker.onmessage
 </table>
 </div>
 <ul>
-  <li><strong>봉인 시점은 크기(8MB)와 시간(초안 5분)입니다(#021).</strong> 오래 열어 둔 탭도 업로드 주기에 맞춰 로그가 올라가게 하려는 것입니다. 시간 상한은 5단계에서 공개 옵션으로 둡니다.</li>
-  <li><strong>닫힐 때 봉인하지 않습니다.</strong> 봉인은 Worker 안의 비동기 작업(handle 닫기, <code>move()</code>)이라 페이지가 사라지는 중에는 끝까지 실행된다는 보장이 없습니다. 탭이 사라지면 그 탭의 Lock(<code>opfslogd:tab:{tabId}</code>)이 풀리고, 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 봉인합니다(#012). 정상 종료와 크래시가 같은 경로로 처리됩니다.</li>
-  <li><strong>hidden 때도 봉인하지 않습니다.</strong> 탭을 자주 전환하면 작은 세그먼트가 수없이 생깁니다.</li>
+  <li><strong>로테이션 시점은 크기(8MB)와 시간(초안 5분)입니다(#021).</strong> 오래 열어 둔 탭도 업로드 주기에 맞춰 로그가 올라가게 하려는 것입니다. 시간 상한은 공개 옵션 <code>rotate.maxAgeMs</code>입니다(#036).</li>
+  <li><strong>닫힐 때 pending으로 옮기지 않습니다.</strong> 이 작업은 Worker 안의 비동기 작업(handle 닫기, <code>move()</code>)이라 페이지가 사라지는 중에는 끝까지 실행된다는 보장이 없습니다. 탭이 사라지면 그 탭의 Lock(<code>opfslogd:tab:{tabId}</code>)이 풀리고, 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 pending으로 옮깁니다(#012). 정상 종료와 크래시가 같은 경로로 처리됩니다.</li>
+  <li><strong>hidden 때도 로테이션하지 않습니다.</strong> 탭을 자주 전환하면 작은 세그먼트가 수없이 생깁니다.</li>
   <li><strong>숨겨진 동안의 타이머:</strong> 백그라운드 탭의 타이머는 약 1초, Chrome에서 오래 숨겨지면 1분까지 늦어집니다. 그래서 <code>log()</code>가 호출될 때 버퍼의 첫 레코드가 flush 주기보다 오래됐으면 바로 flush합니다. 마지막 로그 뒤에 호출이 없으면 늦어진 타이머를 기다립니다.</li>
 </ul>
 

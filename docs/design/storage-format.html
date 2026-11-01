@@ -161,7 +161,7 @@ done/     1793251200123_1793251260456_k3f9.seg
           └ 시작 ts      └ 마지막 ts     └ tabId</code></pre>
 <ul>
   <li><strong>기록 중:</strong> <code>{시작 ts}_{tabId}.seg</code></li>
-  <li><strong>봉인할 때:</strong> <code>{시작 ts}_{마지막 ts}_{tabId}.seg</code>로 이름을 바꿉니다. 봉인하면 어차피 <code>move()</code>로 디렉터리를 옮기므로 추가 비용이 없습니다.</li>
+  <li><strong>pending으로 옮길 때:</strong> <code>{시작 ts}_{마지막 ts}_{tabId}.seg</code>로 이름을 바꿉니다. 어차피 <code>move()</code>로 디렉터리를 옮기므로 이름도 함께 바꾸면 추가 비용이 없습니다.</li>
   <li>ts는 13자리로 0을 채웁니다. 파일명을 문자열로 정렬하면 시간순이 됩니다(서기 2286년까지 유효).</li>
   <li>tabId는 Worker가 시작할 때 무작위로 만드는 짧은 ID입니다.</li>
   <li>포맷 버전은 파일명에 넣지 않습니다. 파일 헤더에 있습니다.</li>
@@ -171,7 +171,7 @@ done/     1793251200123_1793251260456_k3f9.seg
 <ul>
   <li><strong>쿼리:</strong> 시간 범위에 걸리는 파일만 엽니다.</li>
   <li><strong>보존 정리:</strong> 오래된 순서와 기간 초과 여부를 판단합니다.</li>
-  <li><strong>주인 없는 파일 복구:</strong> Worker는 살아 있는 동안 <code>opfslogd:tab:{tabId}</code> Web Lock을 잡고 있습니다. 정리 담당은 <code>navigator.locks.query()</code>로 이 Lock이 없는 <code>active/</code> 파일을 찾아 크래시 복구 후 봉인합니다.</li>
+  <li><strong>주인 없는 파일 복구:</strong> Worker는 살아 있는 동안 <code>opfslogd:tab:{tabId}</code> Web Lock을 잡고 있습니다. 정리 담당은 <code>navigator.locks.query()</code>로 이 Lock이 없는 <code>active/</code> 파일을 찾아 크래시 복구 후 pending으로 옮깁니다.</li>
 </ul>
 
 <h2 id="recovery">6. 크래시 복구</h2>
@@ -182,7 +182,7 @@ done/     1793251200123_1793251260456_k3f9.seg
   <li>헤더 줄 자체가 깨진 파일은 쓸 수 있는 레코드가 없으므로 삭제합니다.</li>
 </ol>
 <div class="callout">중간의 나쁜 줄 하나만 건너뛰고 뒤를 살리지 않습니다. 그러면 뒤 줄들의 줄 번호가 밀려서 <code>seq = seq0 + 줄 번호</code> 계산이 틀어집니다. 첫 번째 나쁜 줄에서 잘라내기만 합니다.</div>
-<p>잡지 못하는 것: 디스크에서 내용이 바뀌었는데 결과가 우연히 유효한 JSON인 경우입니다. 드물고, 결과는 로그 한 줄의 값이 틀리는 정도입니다. 봉인한 뒤에는 업로드용 <code>sha256</code>(#007)이 있습니다.</p>
+<p>잡지 못하는 것: 디스크에서 내용이 바뀌었는데 결과가 우연히 유효한 JSON인 경우입니다. 드물고, 결과는 로그 한 줄의 값이 틀리는 정도입니다. 파일이 닫힌 뒤(pending 이후)에는 업로드용 <code>sha256</code>(#007)이 있습니다.</p>
 
 <h2 id="external">7. 외부로 내보내는 포맷</h2>
 <ul>
@@ -230,7 +230,7 @@ done/     1793251200123_1793251260456_k3f9.seg
 
 <h3>보류 (나중에 다시 검토)</h3>
 <ul>
-  <li><strong>압축.</strong> 저장 시 압축(봉인 시 파일 전체, 또는 프레임을 다시 도입해 flush별), export와 upload의 gzip 옵션 모두 보류합니다. 보관 기간이 실제로 부족한지 측정한 뒤 판단합니다.</li>
+  <li><strong>압축.</strong> 저장 시 압축(파일을 닫을 때 파일 전체, 또는 프레임을 다시 도입해 flush별), export와 upload의 gzip 옵션 모두 보류합니다. 보관 기간이 실제로 부족한지 측정한 뒤 판단합니다.</li>
 </ul>
 
 <h2 id="verify">10. 검증할 것</h2>
