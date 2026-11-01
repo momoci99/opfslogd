@@ -249,6 +249,14 @@
   <li>OPFS는 파일 앞부분을 잘라낼 수 없어서, 세그먼트 파일을 통째로 지우는 방식이 가장 저렴합니다. 세그먼트 크기 상한(초안 2MB)은 내부값입니다(#035, #066).</li>
   <li><code>navigator.storage.persist()</code>는 호출하지 않고 옵션도 두지 않습니다. 필요한 앱이 직접 호출합니다(#065).</li>
 </ul>
+<h3>한 번의 실행 (8단계 구현, #078)</h3>
+<ol>
+  <li>메인 스레드가 <code>load</code> 뒤 idle 때, 그 뒤로 1분마다 Worker에 <code>maintain</code>을 보냅니다. Worker에는 <code>requestIdleCallback</code>이 없어서 시점은 메인이 정합니다.</li>
+  <li>Worker가 <code>opfslogd:{ns}:retention</code> Lock을 <code>ifAvailable</code>로 잡습니다. 못 잡으면 이번 차례는 건너뜁니다(#022).</li>
+  <li>주인 없는 파일 복구: <code>active/</code>에서 탭 Lock이 없는 파일을 열어 첫 나쁜 줄에서 자르고(#016), 레코드 ts 범위로 이름을 바꿔 옮깁니다(#067). 레코드가 없거나 헤더가 깨진 파일은 지우고, 새 포맷 파일은 건드리지 않습니다(#013).</li>
+  <li>기간 상한, 그다음 크기 상한 순서로 닫힌 세그먼트를 지웁니다. 지운 <code>pending</code>은 개수와 바이트를 메인에 보내고, 메인이 다음 flush에서 drop 줄로 씁니다(#061, #070).</li>
+</ol>
+<p>실행은 Worker의 쓰기 처리 순서 밖에서 돌기 때문에 그동안에도 쓰기와 ack가 이어집니다. 자기 탭의 활성 파일은 자기 탭 Lock이 잡혀 있어 건드리지 않습니다.</p>
 
 <h2 id="scope">8. 범위 밖</h2>
 <ul>

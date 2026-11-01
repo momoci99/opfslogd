@@ -1,12 +1,17 @@
 // Worker entry, built as dist/worker.js (#009, #059). One worker per tab (#006).
 
 import { lockNames } from './names'
-import { openDirs } from './opfs'
+import { openDirs, type Dirs } from './opfs'
 import type { FromWorker, ToWorker } from './protocol'
+import { runRetention } from './retention'
 import { SegmentWriter } from './writer'
+
+type InitMsg = Extract<ToWorker, { type: 'init' }>
 
 let writer: SegmentWriter | undefined
 let releaseLock: (() => void) | undefined
+let setup: { dirs: Dirs; init: InitMsg } | undefined
+let maintaining = false
 
 // Messages are handled one at a time, in arrival order. Opening a file is async,
 // and a write must not start before the previous one finished.
@@ -39,9 +44,15 @@ async function handle(msg: ToWorker): Promise<void> {
     case 'context':
       await writer?.setContext(msg.context)
       return
+    case 'maintain':
+      // Not awaited: the run lists, reads, and moves other files while writes go on.
+      // It never touches this tab's active file, whose tab lock is held.
+      void maintain()
+      return
     case 'close':
       await writer?.close()
       writer = undefined
+      setup = undefined
       releaseLock?.()
       releaseLock = undefined
       post({ type: 'closed' })
@@ -49,7 +60,32 @@ async function handle(msg: ToWorker): Promise<void> {
   }
 }
 
-async function start(msg: Extract<ToWorker, { type: 'init' }>): Promise<void> {
+/** One retention run, in at most one tab at a time (#022, #050, #053). */
+async function maintain(): Promise<void> {
+  if (!setup || maintaining) return post({ type: 'maintained', ran: false })
+  maintaining = true
+  const { dirs, init } = setup
+  const locks = lockNames(init.namespace)
+  try {
+    await navigator.locks.request(locks.retention, { ifAvailable: true }, async (lock) => {
+      if (!lock) return post({ type: 'maintained', ran: false })
+      const result = await runRetention(dirs, {
+        tabLock: locks.tab,
+        maxBytes: init.retentionMaxBytes,
+        maxAgeMs: init.retentionMaxAgeMs,
+        upload: init.upload,
+        now: Date.now(),
+      })
+      post(result.dropped ? { type: 'maintained', ran: true, dropped: result.dropped } : { type: 'maintained', ran: true })
+    })
+  } catch {
+    post({ type: 'maintained', ran: false })
+  } finally {
+    maintaining = false
+  }
+}
+
+async function start(msg: InitMsg): Promise<void> {
   try {
     if (!('createSyncAccessHandle' in FileSystemFileHandle.prototype) || !navigator.locks) {
       throw new DOMException('createSyncAccessHandle or Web Locks is missing', 'NotSupportedError')
@@ -58,6 +94,7 @@ async function start(msg: Extract<ToWorker, { type: 'init' }>): Promise<void> {
     // Hold the tab lock before any file exists in active/. Otherwise another tab could
     // see the new file without a lock and recover it as an orphan (#012).
     await holdLock(lockNames(msg.namespace).tab(msg.tabId))
+    setup = { dirs, init: msg }
     writer = new SegmentWriter(dirs, {
       tabId: msg.tabId,
       context: msg.context,

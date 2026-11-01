@@ -1190,3 +1190,17 @@ if (isDev) logger.debug('scroll', { y })
 - Measurements also showed the 4M-character cap and the 80% threshold are reached only when one task logs more than about 17,000 records; a 100k/s burst split across tasks drops nothing. No reason to change them.
 
 **To verify:** flush cost on a real low-end phone. `pnpm bench:serve` cannot measure it over plain http on the LAN (OPFS needs a secure context); use Android USB port forwarding or https.
+
+## 078. Retention details settled in implementation: orphans without records are deleted; the run goes beside writes; the main thread schedules it (2026-11-01)
+
+**Decision:**
+- Orphan recovery (#012) deletes an orphaned `active/` file that holds no records (header line only, or a header line followed only by bad lines). It does not move an empty file to `pending/`. Same rule as #075 for the writer's own segments.
+- A recovered orphan goes to `pending/` or `done/` by the upload setting of the tab that runs retention (#068).
+- The worker runs retention outside its ordered message handling, so writes and acks continue during a run. The run never touches a file whose tab lock is held, which includes the running tab's own active file.
+- The worker has no `requestIdleCallback`, so the main thread picks the times: after the `load` event and `requestIdleCallback` (a 1-second `setTimeout` where it is missing), then every minute (#049, #053). Each time it posts a `maintain` message; the worker runs only if it gets the retention lock with `ifAvailable` (#022), and reports back. Deleted `pending/` segments come back as counts for the drop line (#061, #070).
+- The size limit (#052) sorts closed segments by file name, which is start time order (#012).
+
+**Why:**
+- A file without records has nothing to export or upload. Since segments open at the first write (#064), such an orphan exists only when a tab died between writing the header and the first batch.
+- Running retention inside the ordered handling would hold back every write while it lists directories and scans orphans. It touches other files, so there is no conflict to order.
+- Scheduling on the main thread keeps one place for the idle rule that upload (#049) will share.

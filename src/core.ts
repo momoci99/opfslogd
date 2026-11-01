@@ -18,6 +18,12 @@ const DEFAULT_FLUSH_TIMEOUT_MS = 5_000 // #038
 const ACK_TIMEOUT_MS = 10_000
 /** close() gives up waiting for the worker after this long and terminates it. */
 const CLOSE_TIMEOUT_MS = 5_000
+const DEFAULT_RETENTION_MAX_BYTES = 50_000_000 // #052
+const DEFAULT_RETENTION_MAX_AGE_MS = 7 * 86_400_000 // #051
+/** Retention (and later upload) runs this often after the first idle run (#053). */
+const MAINTAIN_INTERVAL_MS = 60_000
+/** Fallback wait where requestIdleCallback is missing (Safari) (#049). */
+const IDLE_FALLBACK_MS = 1_000
 const DEFAULT_NAMESPACE = 'default'
 const OPFS_ROOT = 'opfslogd'
 
@@ -35,6 +41,12 @@ export interface InitOptions {
   context?: Record<string, unknown>
   rotate?: {
     /** Close a non-empty segment after this long. Default 5 minutes. (#021, #036) */
+    maxAgeMs?: number
+  }
+  retention?: {
+    /** Delete closed segments once all files in the namespace pass this size. Default 50MB. (#050, #052) */
+    maxBytes?: number
+    /** Delete closed segments whose last record is older than this. Default 7 days. (#050, #051) */
     maxAgeMs?: number
   }
   /** Internal problems. Without it, each code is printed once with console.error (#040). */
@@ -92,6 +104,8 @@ export class Core {
   private closing: Promise<void> | undefined
   private onWorkerClosed: (() => void) | undefined
 
+  private maintainTimer: ReturnType<typeof setTimeout> | undefined
+  private cancelIdle: (() => void) | undefined
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private errorFlushPending = false
   private lastFlushAt = -Infinity
@@ -170,8 +184,16 @@ export class Core {
       return this.fail('invalid-option', `namespace must match [a-z0-9_-]{1,64}, got ${JSON.stringify(namespace)}`)
     }
     const maxAgeMs = options.rotate?.maxAgeMs ?? DEFAULT_ROTATE_MAX_AGE_MS
-    if (typeof maxAgeMs !== 'number' || !(maxAgeMs > 0)) {
-      return this.fail('invalid-option', `rotate.maxAgeMs must be a positive number, got ${String(maxAgeMs)}`)
+    const retentionMaxBytes = options.retention?.maxBytes ?? DEFAULT_RETENTION_MAX_BYTES
+    const retentionMaxAgeMs = options.retention?.maxAgeMs ?? DEFAULT_RETENTION_MAX_AGE_MS
+    for (const [name, value] of [
+      ['rotate.maxAgeMs', maxAgeMs],
+      ['retention.maxBytes', retentionMaxBytes],
+      ['retention.maxAgeMs', retentionMaxAgeMs],
+    ] as const) {
+      if (typeof value !== 'number' || !(value > 0)) {
+        return this.fail('invalid-option', `${name} must be a positive number, got ${String(value)}`)
+      }
     }
 
     // init({ context }) is setContext(context) at init time; its keys win (#032).
@@ -205,8 +227,11 @@ export class Core {
       rotateMaxAgeMs: maxAgeMs,
       rotateMaxBytes: ROTATE_MAX_BYTES,
       upload: false,
+      retentionMaxBytes,
+      retentionMaxAgeMs,
       root: OPFS_ROOT,
     })
+    this.scheduleMaintenance()
     document.addEventListener('visibilitychange', this.onVisibility)
     window.addEventListener('pagehide', this.onPageHide)
 
@@ -284,6 +309,14 @@ export class Core {
         return
       case 'ack':
         return this.onAck(msg.id, msg.ok, msg.ok ? undefined : msg.reason)
+      case 'maintained':
+        if (msg.dropped) {
+          // written as a drop line at the next flush (#061, #070)
+          const { segments, bytes, from, to } = msg.dropped
+          this.queue.addRetention(segments, bytes, from, to)
+          this.startFlushTimer()
+        }
+        return
       case 'closed':
         this.onWorkerClosed?.()
         this.onWorkerClosed = undefined
@@ -345,6 +378,32 @@ export class Core {
     this.lastSentId = batch.id
     for (const w of this.waiters) if (w.target === undefined) w.target = batch.id
     if (this.watchdog === undefined) this.restartWatchdog()
+  }
+
+  /**
+   * First run once the page has loaded and is idle, then every minute (#049, #053).
+   * Every tab asks; the worker runs only if it gets the lock (#022).
+   */
+  private scheduleMaintenance(): void {
+    const run = (): void => {
+      this.cancelIdle = undefined
+      if (this.state !== 'open') return
+      this.post({ type: 'maintain' })
+      this.maintainTimer = setTimeout(run, MAINTAIN_INTERVAL_MS)
+    }
+    const whenIdle = (): void => {
+      if (typeof requestIdleCallback === 'function') {
+        const id = requestIdleCallback(run, { timeout: 10_000 })
+        this.cancelIdle = () => cancelIdleCallback(id)
+      } else {
+        const id = setTimeout(run, IDLE_FALLBACK_MS)
+        this.cancelIdle = () => clearTimeout(id)
+      }
+    }
+    if (document.readyState === 'complete') return whenIdle()
+    const onLoad = (): void => whenIdle()
+    window.addEventListener('load', onLoad, { once: true })
+    this.cancelIdle = () => window.removeEventListener('load', onLoad)
   }
 
   /** Adds a subscriber; returns a function that removes it, safe to call twice (#043). */
@@ -457,6 +516,10 @@ export class Core {
     this.flushTimer = undefined
     clearTimeout(this.watchdog)
     this.watchdog = undefined
+    clearTimeout(this.maintainTimer)
+    this.maintainTimer = undefined
+    this.cancelIdle?.()
+    this.cancelIdle = undefined
     this.errorFlushPending = false
     this.oldestQueued = undefined
     this.queue = new RecordQueue()

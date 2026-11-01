@@ -1,7 +1,7 @@
 // Worker-side segment writer: open, append, roll back, rotate (#012, #016, #021, #064, #066, #067, #068).
 
-import { activeName, closedName } from './names'
-import type { Dirs, SyncAccessHandle, WorkerFileHandle } from './opfs'
+import { activeName } from './names'
+import { freeName, type Dirs, type SyncAccessHandle, type WorkerFileHandle } from './opfs'
 import type { WriteFailReason } from './queue'
 import { headerLine } from './segment'
 
@@ -139,27 +139,6 @@ export class SegmentWriter {
     } catch {
       // Left in active/: orphan recovery moves it once this tab's lock is gone (#012).
     }
-  }
-}
-
-/**
- * The closed name, or the same name with `maxTs` raised by 1ms per clash. Two segments of
- * one tab clash only when all their records share one millisecond (two context changes
- * within 1ms); moving onto an existing name would replace that file.
- */
-async function freeName(dir: FileSystemDirectoryHandle, minTs: number, maxTs: number, tabId: string): Promise<string> {
-  for (let end = maxTs; ; end++) {
-    const name = closedName(minTs, end, tabId)
-    if (!(await exists(dir, name))) return name
-  }
-}
-
-async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
-  try {
-    await dir.getFileHandle(name)
-    return true
-  } catch {
-    return false
   }
 }
 

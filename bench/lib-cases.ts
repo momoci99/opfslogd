@@ -130,6 +130,8 @@ async function roundTrips(url: URL, payload: Uint8Array, lines: number): Promise
     rotateMaxAgeMs: 300_000,
     rotateMaxBytes: 2_000_000,
     upload: false,
+    retentionMaxBytes: 50_000_000,
+    retentionMaxAgeMs: 7 * 86_400_000,
     root,
   })
   const ready = await next()

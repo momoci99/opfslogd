@@ -2,7 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { close, flush, init, logger, setContext, type OpfslogdError } from '../../src/index'
+import { closedName } from '../../src/names'
 import { DROP_MSG } from '../../src/queue'
+import { serializeRecord } from '../../src/record'
+import { headerLine } from '../../src/segment'
 
 const workerUrl = new URL('../../src/worker.ts', import.meta.url)
 
@@ -151,6 +154,38 @@ describe('logger lifecycle', () => {
     logger.info('x')
     await flush()
     expect(msgs(await lines('active'))).toEqual(['x'])
+  })
+})
+
+describe('retention through the public API (#053, #061)', () => {
+  it('runs once the page is idle and writes a drop line for deleted pending segments', async () => {
+    freshNamespace()
+    const opfs = await navigator.storage.getDirectory()
+    const nsDir = await (await opfs.getDirectoryHandle('opfslogd', { create: true })).getDirectoryHandle(ns, { create: true })
+    const pending = await nsDir.getDirectoryHandle('pending', { create: true })
+    const old = Date.now() - 10 * 86_400_000
+    const file = await pending.getFileHandle(closedName(old, old + 1000, 'oldtab00'), { create: true })
+    const w = await file.createWritable()
+    await w.write(headerLine('oldtab00', 0, '{}') + '\n' + serializeRecord(old + 1000, 'info', 'stale') + '\n')
+    await w.close()
+
+    init({ namespace: ns, workerUrl, retention: { maxAgeMs: 86_400_000 } })
+    await expect.poll(async () => (await lines('pending')).length, { timeout: 5000 }).toBe(0)
+    await expect
+      .poll(
+        async () => {
+          await flush()
+          return (await lines('active')).find((r) => r.msg === DROP_MSG)
+        },
+        { timeout: 5000 },
+      )
+      .toMatchObject({ lv: 'warn', ctx: { reason: 'retention', segments: 1, from: old, to: old + 1000 } })
+  })
+
+  it('reports an invalid retention option (#073)', async () => {
+    const errors: OpfslogdError[] = []
+    init({ namespace: freshNamespace(), workerUrl, retention: { maxBytes: -1 }, onError: (e) => errors.push(e) })
+    expect(errors.map((e) => e.code)).toEqual(['invalid-option'])
   })
 })
 

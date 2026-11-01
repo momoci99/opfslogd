@@ -1,6 +1,7 @@
 // Messages between the main thread and the worker (#018, #031, #064). Internal, not public API.
 
 import type { WriteFailReason } from './queue'
+import type { RetentionDrops } from './retention'
 
 export type ToWorker =
   | {
@@ -15,6 +16,8 @@ export type ToWorker =
       rotateMaxBytes: number
       /** Closed segments go to `pending/` when true, `done/` when false (#068). */
       upload: boolean
+      retentionMaxBytes: number
+      retentionMaxAgeMs: number
       /** OPFS directory under the root. Tests override it; always 'opfslogd' otherwise. */
       root: string
     }
@@ -33,11 +36,15 @@ export type ToWorker =
   | { type: 'context'; context: string }
   /** Move the active segment out of `active/`, release the tab lock, and stop (#030). */
   | { type: 'close' }
+  /** Run retention if no other tab is running it (#022, #053). */
+  | { type: 'maintain' }
 
 export type FromWorker =
   | { type: 'ready' }
   | { type: 'ack'; id: number; ok: true }
   | { type: 'ack'; id: number; ok: false; reason: WriteFailReason }
   | { type: 'closed' }
+  /** A maintenance run ended; `ran` is false when another tab held the lock. */
+  | { type: 'maintained'; ran: boolean; dropped?: RetentionDrops }
   /** Storage could not start (#041). */
   | { type: 'fatal'; code: 'opfs-unavailable'; name: string; message: string }
