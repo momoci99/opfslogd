@@ -162,7 +162,9 @@ OPFS and Web Locks are per origin. If two apps share an origin (`user.github.io/
 
 ## Browser support
 
-Current Chromium-based browsers, Firefox, and Safari, desktop and mobile: anything with OPFS `createSyncAccessHandle()` in workers, `FileSystemFileHandle.move()`, and Web Locks. Tests run in Chromium, Firefox, and WebKit. Safari private browsing may not allow OPFS; the logger then reports `opfs-unavailable` and does nothing.
+Current Chromium-based browsers, Firefox, and Safari on desktop: anything with OPFS `createSyncAccessHandle()` in workers, `FileSystemFileHandle.move()`, and Web Locks. Tests run in Chromium, Firefox, and WebKit. Safari private browsing may not allow OPFS; the logger then reports `opfs-unavailable` and does nothing.
+
+**Mobile browsers are not verified yet.** Chrome on Android and Safari on iOS have the APIs above, but the library has not been tested or measured on real phones. Storage limits, background tab handling, and speed may differ. Real-device checks are planned before 1.0.
 
 ## Development
 
