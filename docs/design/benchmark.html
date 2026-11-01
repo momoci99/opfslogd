@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>벤치마크와 브라우저 확인</h1>
-<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 · 코드: <code>test/browser/</code>, <code>vitest.config.ts</code></p>
+<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 (7단계에서 #064, #066 측정 항목 추가) · 코드: <code>test/browser/</code>, <code>vitest.config.ts</code></p>
 
 <p class="lead">설계가 기대는 브라우저 동작이 실제로 그런지 확인하고, 초안 숫자를 정할 속도를 잽니다. 각 문서의 "검증할 것" 항목의 결과는 이 문서에 모읍니다.</p>
 
@@ -60,7 +60,7 @@ pnpm check:vite                                        # Vite 앱에서 Worker �
   <tr>
     <td>다른 Worker가 sync access handle을 연 파일을 <code>getFile()</code>로 읽기 (<a href="architecture.html#verify">architecture</a>, <a href="api.html#verify">api</a>)</td>
     <td><span class="tag ok">읽힘</span></td><td><span class="tag ok">읽힘</span></td><td><span class="tag ok">읽힘</span></td>
-    <td>다른 탭의 활성 세그먼트를 나중에 export에 넣을 수 있습니다(#054). 쓰는 도중에 읽으면 마지막 줄이 덜 쓰였을 수 있으므로, 읽는 쪽은 줄바꿈으로 끝나지 않는 마지막 줄을 건너뜁니다. 테스트는 결과만 기록합니다.</td>
+    <td>다른 탭의 활성 세그먼트를 나중에 export에 넣을 수 있습니다(#054). 쓰는 도중에 읽으면 마지막 줄이 덜 쓰였을 수 있으므로, 읽는 쪽은 줄바꿈으로 끝나지 않는 마지막 줄을 건너뜁니다. 테스트는 결과만 기록합니다. 상대가 계속 쓰는 동안 읽는 경우(<code>NotReadableError</code> 가능성)는 확인하지 않았고, v0.1은 다른 탭의 활성 세그먼트를 계속 뺍니다(#054 메모).</td>
   </tr>
   <tr>
     <td>Worker가 sync access handle을 연 페이지가 bfcache에 들어가는지, 돌아온 뒤 쓰기가 이어지는지 (<a href="protocol.html#verify">protocol</a>)</td>
@@ -154,6 +154,8 @@ pnpm check:vite                                        # Vite 앱에서 Worker �
   <li><code>pagehide</code> 때 보낸 flush가 파일에 쓰이는 비율 (#020)</li>
   <li>flush마다 새 버퍼를 할당할 때의 GC 비용 (#015)</li>
   <li>Worker 하나당 메모리</li>
+  <li>쓰기가 실패할 때(<code>QuotaExceededError</code>) 브라우저가 일부만 쓰는지 (#064)</li>
+  <li>로그가 많은 앱의 업로드 요청 빈도, 탭 여러 개일 때 retention 동작 (세그먼트 2MB, #066)</li>
 </ul>
 
 <h2 id="manual">6. 실기기에서 직접 확인할 것</h2>
@@ -164,7 +166,7 @@ pnpm check:vite                                        # Vite 앱에서 Worker �
   <li>Safari 사설 브라우징에서 <code>getDirectory()</code>가 실패하는지 (#041)</li>
   <li>Firefox와 Safari(데스크톱, iOS)에서 Worker가 sync handle을 연 페이지가 bfcache에 들어가는지, 돌아온 뒤 쓰기가 이어지는지 (#020). <code>test/bfcache/</code>의 페이지를 열고 직접 뒤로 가기를 하면 됩니다.</li>
   <li>Web Lock을 가진 탭이 freeze되는지, 브라우저별로 언제 되는지 (#022)</li>
-  <li>느린 모바일 회선에서 8MB 세그먼트 업로드 시간 (#045)</li>
+  <li>느린 모바일 회선에서 2MB 세그먼트 업로드 시간 (#045, #066). 처음에는 8MB였음</li>
   <li>휴대폰에서 <code>pnpm bench:serve</code> 페이지 결과 (특히 저사양 Android, iOS Safari)</li>
   <li>장애 복구 직후 여러 클라이언트가 밀린 세그먼트를 한꺼번에 올릴 때의 부하 (#047)</li>
 </ul>

@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>opfslogd 아키텍처</h1>
-<p class="meta">상태: 설계 중 · 최종 수정 2026-10-29 · 관련 결정: <code>docs/decisions.md</code> #006, #007, #008, #009, #010</p>
+<p class="meta">상태: 7단계에서 뒤 결정에 맞춰 갱신 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #006, #007, #009, #022, #034, #046, #050 ~ #053, #057, #059, #062, #065 ~ #068</p>
 
 <p class="lead">각 탭이 자기 전용 Dedicated Worker로 자기 OPFS 파일에 로그를 씁니다. 탭끼리 로그를 주고받지 않으며, 여러 탭 중 하나만 해야 하는 일(보존 정리, 업로드)은 Web Locks로 조율합니다. SharedWorker는 사용하지 않습니다.</p>
 
@@ -36,16 +36,16 @@
   <tr><th>항목</th><th>결정</th></tr>
   <tr><td>대상 브라우저</td><td>최신 2버전 데스크톱 + 모바일 (Chrome, Edge, Firefox, Safari, Android Chrome, iOS Safari)</td></tr>
   <tr><td>로그량</td><td>매우 높음. 초당 수천 건 이상</td></tr>
-  <tr><td>꺼내 쓰기</td><td>파일 내보내기, 쿼리 API, 서버 업로드, 같은 탭 안 실시간 구독</td></tr>
+  <tr><td>꺼내 쓰기</td><td>파일 내보내기, 서버 업로드, 같은 탭 안 실시간 구독. 쿼리 API는 v0.1에서 뺐습니다(#057)</td></tr>
   <tr><td>보존</td><td>설정으로 조정. 기본값은 용량 상한 + 기간 상한</td></tr>
 </table>
 </div>
 
 <h3>라이브러리라서 생기는 요구사항</h3>
 <ul>
-  <li><strong>import만으로 부작용 없음.</strong> SSR에서 import해도 동작해야 합니다. Worker는 <code>init()</code>을 호출할 때 시작합니다.</li>
-  <li><strong>버전 공존.</strong> 탭마다 라이브러리 버전이 다를 수 있습니다. 파일 포맷과 Lock 이름에 버전을 넣습니다.</li>
-  <li><strong>번들러 호환.</strong> <code>new URL('./worker.js', import.meta.url)</code> 패턴을 Vite, webpack, Rollup, esbuild에서 확인해야 합니다.</li>
+  <li><strong>import만으로 부작용 없음.</strong> Worker는 <code>init()</code>을 호출할 때 시작합니다. 브라우저 페이지가 아니면(SSR, Node 등) 아무것도 하지 않습니다(#062).</li>
+  <li><strong>버전 공존.</strong> 탭마다 라이브러리 버전이 다를 수 있습니다. 파일 헤더 줄에 포맷 버전을 넣습니다(#013). Lock 이름에는 버전을 넣지 않습니다. 버전이 달라도 같은 디렉터리와 Lock을 함께 씁니다(#034).</li>
+  <li><strong>번들러 호환.</strong> <code>new URL('./worker.js', import.meta.url)</code> 패턴은 Vite 8의 dev와 build에서 확인했습니다. 한 식으로 써야 합니다(#059). webpack 등 다른 번들러는 아직 확인하지 않았습니다.</li>
   <li><strong>Worker 배포.</strong> Worker는 별도 파일(<code>dist/worker.js</code>)로 배포하고 <code>new URL('./worker.js', import.meta.url)</code>로 불러옵니다. 번들러가 이 파일을 내보내지 못하거나(Rollup, esbuild) 라이브러리를 CDN에서 불러오는 경우, 사용자가 파일을 자기 origin에 두고 <code>init({ workerUrl })</code>로 경로를 넘깁니다. 인라인 빌드는 보류합니다(결정 #009).</li>
   <li><strong>앱을 깨뜨리지 않음.</strong> 지원하지 않는 환경, 용량 부족, 오류가 생기면 조용히 축소 동작하고, 오류는 콜백으로만 알립니다.</li>
   <li><strong>네임스페이스.</strong> 같은 origin 안의 여러 앱이나 인스턴스는 디렉터리로 분리합니다.</li>
@@ -61,7 +61,7 @@
   <tr><td><code>log()</code> 비용</td><td>메인 스레드를 막지 않고 예외도 던지지 않음. 평균 수 µs 이하</td></tr>
   <tr><td>메모리</td><td>탭당 버퍼 상한(예: 4MB). 넘치면 정해진 정책대로 버림</td></tr>
   <tr><td>유실 구간</td><td>크래시 시 최대 flush 주기만큼. 주기는 벤치마크로 정함(<a href="protocol.html#flush">protocol.html</a>, 초안 200ms). 페이지를 닫을 때(<code>pagehide</code>)는 가능한 한 flush</td></tr>
-  <tr><td>과부하 시 버리는 순서</td><td><code>debug</code>부터 버리고 <code>error</code>는 끝까지 보존. 버린 건수는 별도 레코드로 남김</td></tr>
+  <tr><td>과부하 시 버리는 순서</td><td><code>debug</code>, <code>info</code>를 먼저 거절하고 <code>warn</code>, <code>error</code>는 상한까지 받음. 상한(100%)에서는 <code>error</code>도 거절(#019). 버린 건수는 별도 레코드로 남김</td></tr>
 </table>
 </div>
 <div class="callout warn"><strong>포기한 것:</strong> 유실 0 보장(메인 스레드에서는 동기로 쓸 수 없음), 탭 간 완전한 순서, 레코드마다 쿼리 색인 갱신.</div>
@@ -144,9 +144,9 @@
   <!-- Locks -->
   <rect x="520" y="230" width="220" height="150" rx="10" class="box main"/>
   <text x="536" y="254" class="label">Web Locks</text>
-  <text x="536" y="282" font-size="13">opfslogd:retention</text>
+  <text x="536" y="282" font-size="13">opfslogd:{ns}:retention</text>
   <text x="536" y="300" class="small">잡은 탭 하나가 보존 정리</text>
-  <text x="536" y="330" font-size="13">opfslogd:upload</text>
+  <text x="536" y="330" font-size="13">opfslogd:{ns}:upload</text>
   <text x="536" y="348" class="small">잡은 탭 하나가 send() 호출</text>
   <path d="M518,305 L478,305" class="line dash" marker-end="url(#arr)"/>
 </svg>
@@ -158,18 +158,18 @@
   <li><code>log()</code>는 레코드를 JSON 문자열로 만들어 메인 스레드의 문자열 큐에 넣습니다(#014, #015). <code>postMessage</code>는 매번 하지 않습니다.</li>
   <li>버퍼가 찼거나 flush 주기가 되면 레코드를 하나의 <code>ArrayBuffer</code>로 묶어 Worker에 <strong>transfer</strong>합니다(복사 없음).</li>
   <li>Worker는 sync handle로 자기 <code>active</code> 세그먼트에 덧붙입니다.</li>
-  <li>세그먼트가 상한 크기(기본 8MB)에 도달하거나, 열린 지 일정 시간(초안 5분)이 지났고 비어 있지 않으면 로테이션합니다: 지금 파일을 닫아 <code>pending/</code> 또는 <code>done/</code>으로 옮기고 새 파일을 엽니다(#021). 오래 열어 둔 탭의 로그도 업로드 주기에 맞춰 올라가게 하려는 것입니다.</li>
+  <li>세그먼트가 상한 크기(초안 2MB, #066)에 도달하거나, 열린 지 일정 시간(초안 5분)이 지났고 비어 있지 않으면 로테이션합니다: 지금 파일을 닫아 <code>pending/</code> 또는 <code>done/</code>으로 옮기고 새 파일을 엽니다(#021). 오래 열어 둔 탭의 로그도 업로드 주기에 맞춰 올라가게 하려는 것입니다.</li>
   <li>탭이 닫힐 때는 pending으로 옮기지 않습니다. 탭의 Lock이 풀리면 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 pending으로 옮깁니다(#012, #020).</li>
 </ol>
 
-<h3>읽기 경로 (내보내기, 쿼리)</h3>
-<p>모든 탭의 세그먼트를 <code>ts</code>와 탭별 <code>seq</code> 기준으로 병합 정렬해서 읽습니다. 세그먼트 파일명에 시간 범위를 넣어 쿼리할 때 필요 없는 파일은 건너뜁니다.</p>
+<h3>읽기 경로 (내보내기)</h3>
+<p>닫힌 세그먼트 전부와 내 탭의 활성 세그먼트를 <code>ts</code> 기준으로 병합해서 읽습니다. 한 탭 안에서는 <code>seq</code> 순서를 지킵니다(#054, #056). 파일명에 든 시간 범위(그 파일 레코드 <code>ts</code>의 최솟값과 최댓값, #067)로 필요 없는 파일은 건너뜁니다.</p>
 
 <h3>실시간 구독</h3>
-<p>같은 탭 안에서만 지원합니다(<code>logger.subscribe(fn)</code>). 탭 간 실시간 구독은 사용 사례가 없어 범위에서 뺐습니다.</p>
+<p>같은 탭 안에서만 지원합니다(<code>subscribe(fn)</code>, #042 ~ #044). 탭 간 실시간 구독은 사용 사례가 없어 범위에서 뺐습니다.</p>
 
 <h3>설정 충돌</h3>
-<p>탭마다 <code>init(config)</code>을 호출합니다. 탭끼리 설정이 다르면, Lock을 잡은 탭이 자기 설정으로 정리와 업로드를 합니다.</p>
+<p>탭마다 <code>init(config)</code>을 호출합니다. 탭끼리 설정이 다르면, Lock을 잡은 탭이 자기 설정으로 정리와 업로드를 합니다. 세그먼트를 <code>pending/</code>과 <code>done/</code> 중 어디로 보낼지는 그 세그먼트를 닫는 탭의 <code>upload</code> 설정을 따릅니다. upload가 없던 동안 닫힌 세그먼트는 나중에 올라가지 않습니다(#068).</p>
 
 <h2 id="lifecycle">5. 세그먼트 생명주기</h2>
 <figure>
@@ -228,28 +228,26 @@
 <table>
   <tr><th>약속</th><th>내용</th></tr>
   <tr><td>resolve</td><td>세그먼트를 <code>done</code>으로 옮김</td></tr>
-  <tr><td>reject</td><td><code>pending</code>에 그대로 두고 백오프 후 재시도</td></tr>
+  <tr><td>reject</td><td><code>pending</code>에 그대로 두고 다음 주기에 재시도. 백오프는 없고, 그 실행은 첫 실패에서 끝남(#046). 시간 초과는 <code>upload.timeoutMs</code>(#045)</td></tr>
   <tr><td>전달 보장</td><td>최소 한 번(at-least-once). 서버는 <code>segmentId</code>로 중복을 걸러야 함</td></tr>
-  <tr><td><code>meta</code></td><td><code>segmentId</code>, <code>sha256</code>, <code>size</code>, <code>from</code>/<code>to</code> 시간, 레코드 수</td></tr>
-  <tr><td>업로더</td><td>주기마다 각 탭이 <code>opfslogd:upload</code> Lock을 <code>ifAvailable</code>로 잡아 봄. 잡은 탭이 pending을 올리고 바로 놓음. 못 잡은 탭은 이번 주기를 건너뜀 (#022)</td></tr>
-  <tr><td><code>file</code></td><td>내부 세그먼트가 아니라 순수 JSON Lines로 변환한 <code>Blob</code>. 백엔드는 내부 포맷을 몰라도 됨 (결정 #010)</td></tr>
+  <tr><td><code>meta</code></td><td><code>segmentId</code>, <code>sha256</code>, <code>size</code>, <code>from</code>/<code>to</code> 시간, <code>signal</code> (#048)</td></tr>
+  <tr><td>업로더</td><td>주기마다 각 탭이 <code>opfslogd:{ns}:upload</code> Lock을 <code>ifAvailable</code>로 잡아 봄. 잡은 탭이 pending을 올리고 바로 놓음. 못 잡은 탭은 이번 주기를 건너뜀 (#022)</td></tr>
+  <tr><td><code>file</code></td><td>내부 세그먼트가 아니라 순수 JSON Lines로 변환한 <code>Blob</code>. 백엔드는 내부 포맷을 몰라도 됨 (#007, #033)</td></tr>
   <tr><td>실행 위치</td><td>함수는 Worker로 넘길 수 없어서, Lock을 가진 탭의 메인 스레드에서 실행. Worker가 파일을 읽어 Blob으로 넘김</td></tr>
 </table>
 </div>
 <div class="callout"><strong>멈춘 탭 문제 (#022에서 해결):</strong> 브라우저는 오래 숨겨진 탭을 멈추고(freeze), 멈춘 탭은 Lock을 계속 쥡니다. 예전 설계처럼 업로더가 Lock을 계속 쥐고 있으면 업로드가 전부 멈춥니다. 그래서 업로드와 보존 정리 Lock은 <strong>한 번 실행할 때만 잡고 바로 놓습니다.</strong> 멈춘 탭은 타이머가 돌지 않아 Lock을 시도하지도 않습니다. 탭 상태(visible/hidden)에 따른 조건은 두지 않습니다. 남는 위험은 실행 도중에 멈추는 경우로, 그 탭이 깨어날 때까지 그 한 번이 늦어집니다.</div>
 
 <h2 id="retention">7. 보존 정책</h2>
+<p>옵션과 기본값은 <a href="api.html#retention">api.html</a>에서 정했습니다(#050 ~ #053).</p>
 <pre><code>retention: {
-  maxBytes: 100 * 1024 * 1024,        // 100MB, storage.estimate() quota의 10%를 넘지 않게 제한
-  maxAgeMs: 7 * 24 * 60 * 60 * 1000,  // 7일
-  segmentBytes: 8 * 1024 * 1024,      // 8MB, 삭제는 세그먼트 단위
-  // + 세그먼트 시간 상한 (초안 5분, #021). 옵션 이름과 위치는 5단계에서 정함
+  maxBytes: 50_000_000,       // 50MB 초안, namespace 안 세그먼트 파일의 합계 (#052)
+  maxAgeMs: 7 * 86_400_000,   // 7일 (#051)
 }</code></pre>
 <ul>
-  <li>두 조건 중 먼저 걸리는 쪽이 적용됩니다. 초당 0.5~1MB가 쌓일 수 있어서 실제로는 용량 상한이 먼저 걸립니다.</li>
-  <li>삭제 순서: <code>done</code>의 오래된 것부터, 그다음 <code>pending</code>의 오래된 것부터(롤링). 버린 건수를 기록합니다.</li>
-  <li>OPFS는 파일 앞부분을 잘라낼 수 없어서, 세그먼트 파일을 통째로 지우는 방식이 가장 저렴합니다.</li>
-  <li><code>navigator.storage.persist()</code>는 기본으로 호출하지 않습니다. 사용자가 옵션으로 켭니다.</li>
+  <li>기간을 넘은 닫힌 세그먼트를 먼저 지우고, 그래도 합계가 넘으면 <code>done</code>의 오래된 것부터, 그다음 <code>pending</code>의 오래된 것부터 지웁니다(#050). 지운 <code>pending</code>은 drop 줄로 남깁니다.</li>
+  <li>OPFS는 파일 앞부분을 잘라낼 수 없어서, 세그먼트 파일을 통째로 지우는 방식이 가장 저렴합니다. 세그먼트 크기 상한(초안 2MB)은 내부값입니다(#035, #066).</li>
+  <li><code>navigator.storage.persist()</code>는 호출하지 않고 옵션도 두지 않습니다. 필요한 앱이 직접 호출합니다(#065).</li>
 </ul>
 
 <h2 id="scope">8. 범위 밖</h2>
@@ -264,23 +262,18 @@
 <p>결과는 <a href="benchmark.html">benchmark.html</a>에 모읍니다.</p>
 <div class="table-wrap">
 <table>
-  <tr><th>항목</th><th>왜 필요한가</th></tr>
-  <tr><td>OPFS 디렉터리 안에서 <code>FileSystemHandle.move()</code>의 브라우저별 지원</td><td>세그먼트 상태 전이에 사용</td></tr>
-  <tr><td>다른 Worker가 sync handle을 연 파일을 <code>getFile()</code>로 읽을 수 있는가</td><td>내보내기와 쿼리가 <code>active</code> 세그먼트를 읽을 수 있는지</td></tr>
-  <tr><td>Web Lock을 가진 탭이 freeze되는가, 브라우저별로 언제 freeze되는가</td><td>실행 도중 멈춤이 얼마나 자주 생기는지 (#022)</td></tr>
-  <tr><td>Vite dev 모드에서 Worker 경로가 깨지는가 (<code>optimizeDeps.exclude</code> 필요 여부)</td><td>가장 흔한 사용 환경의 개발 경험</td></tr>
-  <tr><td>Worker 하나당 메모리 비용</td><td>탭이 많을 때 비용</td></tr>
-  <tr><td>모바일 Safari의 OPFS quota와 eviction 동작</td><td>보존 기본값 검증</td></tr>
+  <tr><th>항목</th><th>왜 필요한가</th><th>상태</th></tr>
+  <tr><td>OPFS 디렉터리 안에서 <code>FileSystemHandle.move()</code>의 브라우저별 지원</td><td>세그먼트 상태 전이에 사용</td><td>세 엔진 모두 됨</td></tr>
+  <tr><td>다른 Worker가 sync handle을 연 파일을 <code>getFile()</code>로 읽을 수 있는가</td><td>다른 탭의 <code>active</code> 세그먼트를 export에 넣을 수 있는지</td><td>세 엔진 모두 읽힘. 쓰는 중 읽기는 미확인(#054 메모)</td></tr>
+  <tr><td>Web Lock을 가진 탭이 freeze되는가, 브라우저별로 언제 freeze되는가</td><td>실행 도중 멈춤이 얼마나 자주 생기는지 (#022)</td><td>실기기 목록</td></tr>
+  <tr><td>Vite dev 모드에서 Worker 경로가 깨지는가 (<code>optimizeDeps.exclude</code> 필요 여부)</td><td>가장 흔한 사용 환경의 개발 경험</td><td>설정 없이 됨. 단 한 식으로 써야 함(#059)</td></tr>
+  <tr><td>Worker 하나당 메모리 비용</td><td>탭이 많을 때 비용</td><td>구현 단계</td></tr>
+  <tr><td>모바일 Safari의 OPFS quota와 eviction 동작</td><td>보존 기본값 검증</td><td>실기기 목록</td></tr>
 </table>
 </div>
 
 <h2 id="next">10. 다음 단계</h2>
-<ol>
-  <li><strong>저장 포맷:</strong> 완료. <a href="storage-format.html">storage-format.html</a> 참고</li>
-  <li><strong>메인 스레드↔Worker 프로토콜:</strong> 완료. <a href="protocol.html">protocol.html</a> 참고</li>
-  <li><strong>공개 API:</strong> <code>init</code>, <code>log</code>, <code>subscribe</code>, <code>export</code>, <code>query</code>, <code>upload</code></li>
-  <li><strong>벤치마크 환경:</strong> Vitest browser mode (Playwright)</li>
-</ol>
+<p>2단계 이후 진행은 <a href="index.html">설계 현황</a>을 보세요. 저장 포맷은 <a href="storage-format.html">storage-format.html</a>, 프로토콜은 <a href="protocol.html">protocol.html</a>, 공개 API는 <a href="api.html">api.html</a>, 확인과 측정은 <a href="benchmark.html">benchmark.html</a>에 있습니다.</p>
 
 </main>
 </body>

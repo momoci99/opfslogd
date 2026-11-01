@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>메인 스레드 ↔ Worker 프로토콜</h1>
-<p class="meta">상태: 4단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #014 ~ #023 · 상위 문서: <a href="architecture.html">architecture.html</a>, <a href="storage-format.html">storage-format.html</a></p>
+<p class="meta">상태: 4단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #014 ~ #023, 7단계 보완 #061, #064, #066, #067 · 상위 문서: <a href="architecture.html">architecture.html</a>, <a href="storage-format.html">storage-format.html</a></p>
 
 <p class="lead"><code>log()</code>는 그 자리에서 레코드를 JSON 문자열로 만들어 메인 스레드의 문자열 큐에 넣습니다. 세 가지 조건 중 하나가 맞으면 큐를 바이트 하나로 묶어 Worker로 transfer하고, Worker는 받은 바이트를 세그먼트 파일에 그대로 덧붙입니다.</p>
 
@@ -25,7 +25,7 @@
     <li><a href="#overload">과부하 때 버리기</a></li>
     <li><a href="#lifecycle">숨겨질 때와 닫힐 때</a></li>
     <li><a href="#subscribe">같은 탭 안 구독</a></li>
-    <li><a href="#later">5단계로 넘긴 것</a></li>
+    <li><a href="#later">5단계와 7단계에서 정한 것</a></li>
     <li><a href="#verify">검증할 것</a></li>
   </ol>
 </nav>
@@ -134,7 +134,7 @@ flush 때:  payload = strings.join('\n') + '\n'
 <h3>여기서 다루지 않는 트리거</h3>
 <ul>
   <li>페이지가 숨겨지거나 닫힐 때(<code>visibilitychange</code>, <code>pagehide</code>): 아래 남은 항목에서 다룹니다. 백그라운드 탭은 타이머가 1초에 한 번(Chrome은 오래 숨겨지면 1분에 한 번)으로 늦춰지므로 주기 트리거만으로는 부족합니다.</li>
-  <li>사용자가 직접 부르는 <code>flush()</code>: 5단계 공개 API에서 다룹니다.</li>
+  <li>사용자가 직접 부르는 <code>flush()</code>: 5단계에서 정했습니다(#038).</li>
 </ul>
 
 <div class="callout"><strong>크기 트리거로 드러난 문제 (#018에서 해결):</strong> 크기 트리거가 있으면 메인 스레드 버퍼는 256K자 이상 쌓이지 않으므로, 버퍼에 건 4MB 상한은 발동하지 않습니다. 하지만 Worker가 OPFS 쓰기를 따라가지 못하면 보낸 메시지가 Worker의 메시지 큐에 쌓입니다. 메인 스레드는 그 양을 볼 수 없고, 큐에는 상한도 없습니다. 상한은 "메인 버퍼 + 보냈지만 아직 쓰지 않은 양"에 걸어야 합니다. 그래서 Worker가 쓰기 완료 응답(ack)을 보내도록 했습니다. 다음 절을 보세요.</div>
@@ -145,11 +145,12 @@ flush 때:  payload = strings.join('\n') + '\n'
 ───────────                                   ──────
 flush #41 (12K자)
   inFlight += 12K
-  worker.postMessage({ id: 41, buf }, [buf]) ──▶  onmessage
+  worker.postMessage({ id: 41, buf, lines, minTs, maxTs }, [buf]) ──▶  onmessage
                                                   handle.write(buf)
-                                     ◀────────── self.postMessage({ id: 41 })
+                                     ◀────────── self.postMessage({ id: 41, ok: true })
 worker.onmessage
   inFlight -= 12K   (보낼 때 41번 크기를 기억해 둠)</code></pre>
+<p class="meta">7단계에서 더한 것: <code>lines</code>(줄 수)는 Worker가 다음 세그먼트의 <code>seq0</code>를 정할 때(#064), <code>minTs</code>, <code>maxTs</code>는 파일명의 시간 범위에(#067) 씁니다. 쓰기가 실패하면 Worker는 쓰기 전 위치로 되돌리고 <code>ok: false</code>로 응답한 뒤 로테이션합니다. 메인은 그 flush의 줄 수를 drop으로 셉니다(#064).</p>
 <div class="table-wrap">
 <table>
   <tr><th></th><th>A. 응답 없음</th><th>B. flush마다 ack (채택)</th><th>C. Worker 쪽에서 버림</th></tr>
@@ -203,10 +204,11 @@ worker.onmessage
 <pre><code>{"ts":1793251200400,"lv":"warn","msg":"opfslogd: records dropped","ctx":{"reason":"overload","dropped":{"debug":1200,"info":300},"from":1793251200210,"to":1793251200390}}</code></pre>
 <ul>
   <li>flush마다 최대 한 줄이라 이 줄이 폭주하지 않습니다.</li>
-  <li>일반 레코드와 같은 형태라 export, 쿼리, 업로드가 따로 처리할 필요가 없습니다. seq도 하나 차지합니다.</li>
+  <li>일반 레코드와 같은 형태라 export와 업로드가 따로 처리할 필요가 없습니다. seq도 하나 차지합니다.</li>
   <li><code>from</code>, <code>to</code>는 처음과 마지막으로 버린 시각입니다. 읽는 사람이 이 구간에 빈 곳이 있다는 것을 알 수 있습니다.</li>
-  <li>journald가 로그 안에 "Suppressed N messages" 줄을 남기는 것과 같은 방식입니다. <code>reason</code>은 Sentry처럼 이유를 구분하려고 둡니다. 나중에 다른 이유(예: 보존 정리로 지운 pending 세그먼트, #007)도 같은 형식으로 남길 수 있습니다.</li>
-  <li>앱에 콜백으로 알리는 것은 5단계 공개 API에서 정합니다.</li>
+  <li>journald가 로그 안에 "Suppressed N messages" 줄을 남기는 것과 같은 방식입니다. <code>reason</code>은 Sentry처럼 이유를 구분하려고 둡니다. 다른 이유도 같은 형식으로 남깁니다: <code>"retention"</code>(보존 정리로 지운 pending 세그먼트, #050), <code>"quota"</code>와 <code>"write-failed"</code>(쓰기 실패, #064).</li>
+  <li><strong>모든 레코드 줄은 메인 스레드의 flush에서 나옵니다(#061).</strong> Worker에서 생긴 사건(retention 삭제)은 건수만 메인에 보내고, 메인이 다음 flush에서 drop 줄로 씁니다. 그래야 메인이 센 seq와 파일의 줄 번호가 맞습니다. tabId도 메인이 만듭니다.</li>
+  <li>앱에 따로 알리는 콜백은 두지 않습니다(#039). drop 줄을 알아보는 방법은 #044입니다.</li>
 </ul>
 
 <h2 id="lifecycle">7. 숨겨질 때와 닫힐 때 (#020)</h2>
@@ -219,20 +221,20 @@ worker.onmessage
 </table>
 </div>
 <ul>
-  <li><strong>로테이션 시점은 크기(8MB)와 시간(초안 5분)입니다(#021).</strong> 오래 열어 둔 탭도 업로드 주기에 맞춰 로그가 올라가게 하려는 것입니다. 시간 상한은 공개 옵션 <code>rotate.maxAgeMs</code>입니다(#036).</li>
-  <li><strong>닫힐 때 pending으로 옮기지 않습니다.</strong> 이 작업은 Worker 안의 비동기 작업(handle 닫기, <code>move()</code>)이라 페이지가 사라지는 중에는 끝까지 실행된다는 보장이 없습니다. 탭이 사라지면 그 탭의 Lock(<code>opfslogd:tab:{tabId}</code>)이 풀리고, 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 pending으로 옮깁니다(#012). 정상 종료와 크래시가 같은 경로로 처리됩니다.</li>
+  <li><strong>로테이션 시점은 크기(초안 2MB, #066)와 시간(초안 5분)입니다(#021).</strong> 오래 열어 둔 탭도 업로드 주기에 맞춰 로그가 올라가게 하려는 것입니다. 시간 상한은 공개 옵션 <code>rotate.maxAgeMs</code>입니다(#036).</li>
+  <li><strong>닫힐 때 pending으로 옮기지 않습니다.</strong> 이 작업은 Worker 안의 비동기 작업(handle 닫기, <code>move()</code>)이라 페이지가 사라지는 중에는 끝까지 실행된다는 보장이 없습니다. 탭이 사라지면 그 탭의 Lock(<code>opfslogd:{ns}:tab:{tabId}</code>, #034)이 풀리고, 정리 담당 탭이 주인 없는 <code>active/</code> 파일을 복구하고 pending으로 옮깁니다(#012). 정상 종료와 크래시가 같은 경로로 처리됩니다.</li>
   <li><strong>hidden 때도 로테이션하지 않습니다.</strong> 탭을 자주 전환하면 작은 세그먼트가 수없이 생깁니다.</li>
   <li><strong>숨겨진 동안의 타이머:</strong> 백그라운드 탭의 타이머는 약 1초, Chrome에서 오래 숨겨지면 1분까지 늦어집니다. 그래서 <code>log()</code>가 호출될 때 버퍼의 첫 레코드가 flush 주기보다 오래됐으면 바로 flush합니다. 마지막 로그 뒤에 호출이 없으면 늦어진 타이머를 기다립니다.</li>
 </ul>
 
 <h2 id="subscribe">8. 같은 탭 안 구독 <code>subscribe()</code> (#023)</h2>
-<p><code>subscribe(fn)</code>는 로그가 기록될 때마다 앱이 등록한 함수에 그 로그를 알려주는 통로입니다. 저장된 로그를 나중에 꺼내는 <code>export</code>, <code>query</code>와 달리 지금 막 기록된 로그를 받습니다. 같은 탭 안에서만 동작합니다(#006). v0.1에 포함합니다.</p>
+<p><code>subscribe(fn)</code>는 로그가 기록될 때마다 앱이 등록한 함수에 그 로그를 알려주는 통로입니다. 저장된 로그를 나중에 꺼내는 <code>exportLogs()</code>와 달리 지금 막 기록된 로그를 받습니다. 같은 탭 안에서만 동작합니다(#006). v0.1에 포함합니다.</p>
 <ul>
   <li><strong>쓰임:</strong> 앱 안의 디버그 패널(DevTools를 열기 어려운 모바일 등), 개발 중 콘솔 출력, 테스트</li>
   <li><strong>부르는 때:</strong> flush 때 묶음을 만든 뒤, Worker로 보내기 전에 구독 함수마다 한 번씩 그 묶음을 넘깁니다.</li>
   <li><strong>받는 내용:</strong> 파일에 들어가는 것과 같습니다. 거절된 로그는 오지 않고, 버린 건수 줄(#019)은 옵니다.</li>
   <li>구독 함수가 예외를 던져도 격리되어 로그 저장에 영향이 없습니다. 구독자가 없으면 추가 비용은 0입니다.</li>
-  <li>넘기는 형태(문자열 배열 또는 파싱한 객체 배열)와 API 모양은 5단계에서 정합니다.</li>
+  <li>넘기는 형태는 export 줄과 같은 모양의 파싱된 객체 배열이고, 해제는 반환된 함수로 합니다(#042, #043).</li>
 </ul>
 <div class="table-wrap">
 <table>
@@ -244,27 +246,28 @@ worker.onmessage
 </table>
 </div>
 
-<h2 id="later">9. 5단계로 넘긴 것</h2>
+<h2 id="later">9. 5단계와 7단계에서 정한 것</h2>
 <ul>
-  <li><code>subscribe()</code>가 넘기는 형태와 API 모양 (#023)</li>
-  <li>버린 건수를 앱에 알리는 콜백 (#019)</li>
-  <li>사용자가 직접 부르는 <code>flush()</code> (#017)</li>
-  <li>세그먼트 시간 상한 옵션의 이름과 위치 (#021)</li>
-  <li><code>send()</code>가 끝나지 않을 때를 위한 <code>AbortSignal</code> 또는 timeout (#022)</li>
+  <li><code>subscribe()</code>가 넘기는 형태와 API 모양 (#023 → #042, #043)</li>
+  <li>버린 건수를 앱에 알리는 콜백 (#019 → #039, 없음)</li>
+  <li>사용자가 직접 부르는 <code>flush()</code> (#017 → #038)</li>
+  <li>세그먼트 시간 상한 옵션의 이름과 위치 (#021 → #036, <code>rotate.maxAgeMs</code>)</li>
+  <li><code>send()</code>가 끝나지 않을 때를 위한 <code>AbortSignal</code> 또는 timeout (#022 → #045)</li>
+  <li>tab, seq를 누가 정하는가 (7단계 → #061), 쓰기 실패 처리 (→ #064), 파일명 시간의 뜻 (→ #067)</li>
 </ul>
 
 <h2 id="verify">10. 검증할 것</h2>
 <p>결과는 <a href="benchmark.html">benchmark.html</a>에 모읍니다.</p>
 <div class="table-wrap">
 <table>
-  <tr><th>항목</th><th>왜 필요한가</th></tr>
-  <tr><td>레코드 하나의 <code>JSON.stringify</code> 비용 (모바일 포함)</td><td><code>log()</code> 비용 목표(수 µs 이하) 확인 (#014)</td></tr>
-  <tr><td>문자열 보관 + flush 때 한 번 인코딩 vs 호출마다 <code>encodeInto</code></td><td>버퍼 형태 확정 (#014, #015)</td></tr>
-  <tr><td>flush 트리거 숫자 (200ms, 256K자, 50ms). 주기는 "flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고름</td><td>폭주 때 버리는 양과 메인 스레드 멈춤 시간 사이의 균형 (#017)</td></tr>
-  <tr><td>폭주와 메인 스레드 긴 작업이 겹칠 때 실제로 버려지는 양</td><td>ack 지연으로 문턱이 얼마나 일찍 걸리는지, 80%와 4M자가 적당한지 (#018, #019)</td></tr>
-  <tr><td>Web Lock이나 sync access handle을 쥔 페이지가 bfcache에 들어갈 수 있는지, 들어가면 Worker는 어떻게 되는지</td><td>뒤로 가기로 돌아왔을 때 쓰기가 이어지는지 (#020)</td></tr>
-  <tr><td><code>pagehide</code> 때 보낸 flush가 실제로 파일에 쓰이는 비율 (브라우저별)</td><td>닫을 때 잃는 양 (#020)</td></tr>
-  <tr><td>flush마다 새 버퍼를 할당할 때의 GC 비용</td><td>버퍼 풀이 필요한지 (#015)</td></tr>
+  <tr><th>항목</th><th>왜 필요한가</th><th>상태</th></tr>
+  <tr><td>레코드 하나의 <code>JSON.stringify</code> 비용 (모바일 포함)</td><td><code>log()</code> 비용 목표(수 µs 이하) 확인 (#014)</td><td>데스크톱 엔진에서 확인, #014 유지. 휴대폰은 실기기 목록</td></tr>
+  <tr><td>문자열 보관 + flush 때 한 번 인코딩 vs 호출마다 <code>encodeInto</code></td><td>버퍼 형태 확정 (#014, #015)</td><td>문자열 보관이 2~10배 쌈. #015 유지</td></tr>
+  <tr><td>flush 트리거 숫자 (200ms, 256K자, 50ms). 주기는 "flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고름</td><td>폭주 때 버리는 양과 메인 스레드 멈춤 시간 사이의 균형 (#017)</td><td>구현 단계</td></tr>
+  <tr><td>폭주와 메인 스레드 긴 작업이 겹칠 때 실제로 버려지는 양</td><td>ack 지연으로 문턱이 얼마나 일찍 걸리는지, 80%와 4M자가 적당한지 (#018, #019)</td><td>구현 단계</td></tr>
+  <tr><td>Web Lock이나 sync access handle을 쥔 페이지가 bfcache에 들어갈 수 있는지, 들어가면 Worker는 어떻게 되는지</td><td>뒤로 가기로 돌아왔을 때 쓰기가 이어지는지 (#020)</td><td>Chromium은 들어가고 쓰기가 이어짐. Firefox, Safari는 실기기 목록</td></tr>
+  <tr><td><code>pagehide</code> 때 보낸 flush가 실제로 파일에 쓰이는 비율 (브라우저별)</td><td>닫을 때 잃는 양 (#020)</td><td>구현 단계</td></tr>
+  <tr><td>flush마다 새 버퍼를 할당할 때의 GC 비용</td><td>버퍼 풀이 필요한지 (#015)</td><td>구현 단계</td></tr>
 </table>
 </div>
 

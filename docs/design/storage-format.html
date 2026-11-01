@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>opfslogd 저장 포맷</h1>
-<p class="meta">상태: 3단계 완료, 4단계에서 프레임 헤더 제거 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #010(대체됨), #011, #012, #013, #014, #016 · 상위 문서: <a href="architecture.html">architecture.html</a></p>
+<p class="meta">상태: 3단계 완료, 4단계에서 프레임 헤더 제거 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #010(대체됨), #011, #012, #013, #014, #016, #033, #061, #064, #067 · 상위 문서: <a href="architecture.html">architecture.html</a></p>
 
 <p class="lead">세그먼트 파일은 JSON 헤더 한 줄과 그 뒤의 UTF-8 JSON Lines로 이루어진 텍스트 파일입니다. 바이너리 프레임은 쓰지 않습니다. 이 포맷은 라이브러리 내부 전용이며, 내보내기(export)와 업로드 때는 줄마다 탭 ID, seq, 전역 context를 채운 JSON Lines로 변환합니다.</p>
 
@@ -99,15 +99,15 @@
   <tr><th>키</th><th>용도</th></tr>
   <tr><td><code>format</code></td><td>이 파일을 쓴 포맷 버전 (#013의 <code>formatVersion</code>)</td></tr>
   <tr><td><code>minReader</code></td><td>읽는 데 필요한 최소 버전 (#013의 <code>minReaderVersion</code>)</td></tr>
-  <tr><td><code>tab</code></td><td>탭 ID. 파일명에도 있지만 파일 하나만 꺼내 봐도 알 수 있게 둠</td></tr>
-  <tr><td><code>seq0</code></td><td>이 파일 첫 줄의 seq. 같은 Worker의 이전 세그먼트에서 이어서 셈</td></tr>
+  <tr><td><code>tab</code></td><td>탭 ID. 파일명에도 있지만 파일 하나만 꺼내 봐도 알 수 있게 둠. 메인 스레드가 <code>init()</code> 때 만들어 Worker에 넘김(#061)</td></tr>
+  <tr><td><code>seq0</code></td><td>이 파일 첫 줄의 seq. Worker가 지금까지 <strong>받은</strong> 줄 수로 정함. 쓰기 실패로 잃은 줄도 번호를 차지하므로, 빈 번호는 세그먼트 사이에만 생김(#064)</td></tr>
   <tr><td><code>context</code></td><td>전역 context (#011)</td></tr>
 </table>
 </div>
 
 <h3>규칙</h3>
 <ul>
-  <li><strong>키 순서 고정:</strong> 레코드 줄은 항상 <code>ts</code>, <code>lv</code> 순서로 시작합니다. ts가 13자리 고정이라 레벨이 줄의 고정 위치에 오고, 쿼리가 <code>JSON.parse</code> 없이 거를 수 있습니다.</li>
+  <li><strong>키 순서 고정:</strong> 레코드 줄은 항상 <code>ts</code>, <code>lv</code> 순서로 시작합니다. ts가 13자리 고정이라 레벨이 줄의 고정 위치에 오고, export의 시간 필터(#055)가 <code>JSON.parse</code> 없이 거를 수 있습니다.</li>
   <li><strong>헤더 줄은 항상 평문 JSON:</strong> 나중에 압축 같은 기능이 생겨도 헤더 줄은 그대로 둡니다. 어떤 버전이든 <code>minReader</code>를 읽고 이 파일을 건너뛸지 판단할 수 있어야 합니다.</li>
   <li><strong>줄 경계:</strong> <code>JSON.stringify</code>는 문자열 안의 줄바꿈을 <code>\n</code>으로 이스케이프하므로, 레코드 내용이 줄 경계를 깨지 않습니다.</li>
 </ul>
@@ -143,13 +143,13 @@ handle.write(new Uint8Array(buffer, 0, written), { at: offset })</code></pre>
   <tr><th>값</th><th>위치</th><th>이유</th></tr>
   <tr><td><code>tab</code> (탭 ID)</td><td>헤더 줄</td><td>세그먼트 하나는 탭 하나 소유</td></tr>
   <tr><td><code>seq</code> (탭 안 순번)</td><td>헤더 줄의 <code>seq0</code> + 줄 번호</td><td>계산으로 복원 가능</td></tr>
-  <tr><td>전역 context (앱 버전, 세션 ID 등)</td><td>헤더 줄</td><td><code>init()</code>에서 한 번 정해지는 값</td></tr>
+  <tr><td>전역 context (앱 버전, 세션 ID 등)</td><td>헤더 줄</td><td><code>init()</code>에서 정하고 <code>setContext()</code>로 바뀌면 새 세그먼트를 시작함(#031, #032)</td></tr>
 </table>
 </div>
 <p>export와 upload에서 JSONL로 변환할 때 이 값들을 각 줄에 다시 채워 넣습니다. 레코드마다 수십 바이트를 아끼며, 초당 1만 건이면 초당 수백 KB에 해당합니다.</p>
 <pre><code>// 내보낸 JSONL 한 줄
-{"ts":1793251200123,"tab":"k3f9","seq":1042,"lv":"error","msg":"결제 실패","ctx":{"userId":42},"app":{"version":"2.3.1"}}</code></pre>
-<p class="meta">내보낸 줄에서 전역 context를 담는 필드 이름(예시의 <code>app</code>)은 미결정입니다.</p>
+{"ts":1793251200123,"lv":"error","msg":"결제 실패","ctx":{"userId":42},"tab":"k3f9","seq":1042,"context":{"version":"2.3.1"}}</code></pre>
+<p class="meta">전역 context는 <code>context</code> 아래에 중첩합니다(#033).</p>
 
 <h3>직렬화 실패 처리</h3>
 <p>순환 참조나 <code>BigInt</code>가 있으면 <code>JSON.stringify</code>가 예외를 던집니다. 이를 잡아서 <code>ctx</code>를 <code>{"_unserializable":"&lt;이유&gt;"}</code>로 바꾸고 로그는 그대로 기록합니다. <code>log()</code>는 예외를 던지지 않습니다.</p>
@@ -158,20 +158,20 @@ handle.write(new Uint8Array(buffer, 0, written), { at: offset })</code></pre>
 <pre><code>active/   1793251200123_k3f9.seg
 pending/  1793251200123_1793251260456_k3f9.seg
 done/     1793251200123_1793251260456_k3f9.seg
-          └ 시작 ts      └ 마지막 ts     └ tabId</code></pre>
+          └ 최소 ts      └ 최대 ts       └ tabId</code></pre>
 <ul>
-  <li><strong>기록 중:</strong> <code>{시작 ts}_{tabId}.seg</code></li>
-  <li><strong>pending으로 옮길 때:</strong> <code>{시작 ts}_{마지막 ts}_{tabId}.seg</code>로 이름을 바꿉니다. 어차피 <code>move()</code>로 디렉터리를 옮기므로 이름도 함께 바꾸면 추가 비용이 없습니다.</li>
+  <li><strong>기록 중:</strong> <code>{시작 ts}_{tabId}.seg</code>. 시작 ts는 첫 쓰기 묶음의 최소 ts입니다.</li>
+  <li><strong>pending으로 옮길 때:</strong> <code>{최소 ts}_{최대 ts}_{tabId}.seg</code>로 이름을 바꿉니다. 두 값은 그 파일 레코드 <code>ts</code>의 최솟값과 최댓값입니다. init 전에 쌓인 레코드나 시계가 뒤로 간 경우에도 범위가 레코드를 모두 덮습니다. 메인이 flush마다 묶음의 최소·최대 ts를 보내고 Worker가 누적합니다(#067). 어차피 <code>move()</code>로 디렉터리를 옮기므로 이름도 함께 바꾸면 추가 비용이 없습니다.</li>
   <li>ts는 13자리로 0을 채웁니다. 파일명을 문자열로 정렬하면 시간순이 됩니다(서기 2286년까지 유효).</li>
-  <li>tabId는 Worker가 시작할 때 무작위로 만드는 짧은 ID입니다.</li>
+  <li>tabId는 메인 스레드가 <code>init()</code> 때 무작위로 만드는 짧은 ID입니다(#061).</li>
   <li>포맷 버전은 파일명에 넣지 않습니다. 파일 헤더에 있습니다.</li>
 </ul>
 
 <h3>이름만으로 할 수 있는 일</h3>
 <ul>
-  <li><strong>쿼리:</strong> 시간 범위에 걸리는 파일만 엽니다.</li>
+  <li><strong>export:</strong> 시간 범위에 걸리는 파일만 엽니다(#055).</li>
   <li><strong>보존 정리:</strong> 오래된 순서와 기간 초과 여부를 판단합니다.</li>
-  <li><strong>주인 없는 파일 복구:</strong> Worker는 살아 있는 동안 <code>opfslogd:tab:{tabId}</code> Web Lock을 잡고 있습니다. 정리 담당은 <code>navigator.locks.query()</code>로 이 Lock이 없는 <code>active/</code> 파일을 찾아 크래시 복구 후 pending으로 옮깁니다.</li>
+  <li><strong>주인 없는 파일 복구:</strong> Worker는 살아 있는 동안 <code>opfslogd:{ns}:tab:{tabId}</code> Web Lock을 잡고 있습니다. 정리 담당은 <code>navigator.locks.query()</code>로 이 Lock이 없는 <code>active/</code> 파일을 찾아 크래시 복구 후 pending으로 옮깁니다.</li>
 </ul>
 
 <h2 id="recovery">6. 크래시 복구</h2>
@@ -180,7 +180,9 @@ done/     1793251200123_1793251260456_k3f9.seg
   <li><code>\n</code>으로 끝나지 않거나, NUL 바이트가 있거나, 파싱되지 않는 첫 줄을 찾습니다.</li>
   <li>그 줄의 시작 위치에서 파일을 잘라냅니다(<code>handle.truncate()</code>). 쓰다 끊긴 flush 안에서도 온전히 써진 줄은 살아남습니다.</li>
   <li>헤더 줄 자체가 깨진 파일은 쓸 수 있는 레코드가 없으므로 삭제합니다.</li>
+  <li>검사하면서 레코드 <code>ts</code>의 최솟값과 최댓값을 구해 pending 파일명에 씁니다(#067).</li>
 </ol>
+<p><strong>쓰기 실패:</strong> 탭이 살아 있는 동안 <code>handle.write()</code>가 실패하면(용량 부족 등), Worker는 쓰기 전 위치로 잘라 되돌리고 실패를 ack한 뒤 로테이션합니다. 그래서 덜 쓴 줄이 파일 중간에 남지 않습니다(#064).</p>
 <div class="callout">중간의 나쁜 줄 하나만 건너뛰고 뒤를 살리지 않습니다. 그러면 뒤 줄들의 줄 번호가 밀려서 <code>seq = seq0 + 줄 번호</code> 계산이 틀어집니다. 첫 번째 나쁜 줄에서 잘라내기만 합니다.</div>
 <p>잡지 못하는 것: 디스크에서 내용이 바뀌었는데 결과가 우연히 유효한 JSON인 경우입니다. 드물고, 결과는 로그 한 줄의 값이 틀리는 정도입니다. 파일이 닫힌 뒤(pending 이후)에는 업로드용 <code>sha256</code>(#007)이 있습니다.</p>
 
@@ -215,7 +217,7 @@ done/     1793251200123_1793251260456_k3f9.seg
 <div class="table-wrap">
 <table>
   <tr><th>작업</th><th>동작</th><th>이유</th></tr>
-  <tr><td>쿼리, export</td><td>건너뛰고, 건너뛴 사실을 결과에 표시</td><td>읽을 수 없음</td></tr>
+  <tr><td>export</td><td>건너뛰고, 건너뛴 사실을 결과에 표시</td><td>읽을 수 없음</td></tr>
   <tr><td>보존 정리</td><td>이름 기준으로 평소처럼 삭제</td><td>파일명 규칙은 고정이므로 안전</td></tr>
   <tr><td>업로드</td><td>건너뛰고 <code>pending</code>에 둠. 새 버전 탭이 업로드</td><td>JSONL로 변환할 수 없음</td></tr>
   <tr><td>크래시 복구</td><td>손대지 않음</td><td>줄 구조가 같다고 장담할 수 없음</td></tr>
@@ -224,8 +226,7 @@ done/     1793251200123_1793251260456_k3f9.seg
 
 <h2 id="open">9. 미결정 항목</h2>
 <ul>
-  <li>내보낸 JSONL에서 전역 context를 담는 필드 이름. 5단계 공개 API에서 <code>init()</code> 옵션 이름과 함께 정합니다.</li>
-  <li>헤더 줄의 키 이름. 구현할 때 정합니다.</li>
+  <li>헤더 줄의 키 이름. 구현할 때 정합니다(<a href="index.html#impl-later">8단계에서 정할 것</a>).</li>
 </ul>
 
 <h3>보류 (나중에 다시 검토)</h3>
@@ -237,9 +238,9 @@ done/     1793251200123_1793251260456_k3f9.seg
 <p>결과는 <a href="benchmark.html">benchmark.html</a>에 모읍니다.</p>
 <div class="table-wrap">
 <table>
-  <tr><th>항목</th><th>왜 필요한가</th></tr>
-  <tr><td>임의 객체 인코딩: 네이티브 <code>JSON.stringify</code> vs JS 바이너리 인코더(msgpackr 등)</td><td>JSONL 채택의 핵심 근거. msgpackr는 특정 조건에서 JSON보다 빠르다고 주장함</td></tr>
-  <tr><td>8MB 세그먼트 쿼리 시간 (줄 앞부분 문자열 검사, 모바일 포함)</td><td>프레임 없이 쿼리 속도가 충분한지 확인 (#016)</td></tr>
+  <tr><th>항목</th><th>왜 필요한가</th><th>상태</th></tr>
+  <tr><td>임의 객체 인코딩: 네이티브 <code>JSON.stringify</code> vs JS 바이너리 인코더(msgpackr 등)</td><td>JSONL 채택의 핵심 근거</td><td>하지 않음. 결과와 상관없이 의존성을 들이지 않음(#060)</td></tr>
+  <tr><td>8MB 세그먼트 스캔 시간 (줄 앞부분 문자열 검사, 모바일 포함)</td><td>프레임 없이 거르는 속도가 충분한지 확인 (#016)</td><td>데스크톱 엔진 7~35ms. #016 유지. 모바일은 실기기 목록</td></tr>
 </table>
 </div>
 

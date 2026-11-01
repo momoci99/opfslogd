@@ -78,7 +78,7 @@ When the size limit is hit, `done` segments are deleted first, then the oldest `
 - Web Locks give one uploader across tabs, and hand over automatically when that tab closes. This was the main reason the earlier design used a SharedWorker.
 - Functions cannot be passed to a worker, so `send()` runs on the main thread of the lock holder. Upload is not on the hot path, so this cost is fine.
 - Delivery is at-least-once. `meta` carries `segmentId` (idempotency key), `sha256`, `size`, and time range so the backend can dedupe and verify.
-- `file` is the segment converted to plain JSON Lines, not the internal segment bytes (see #010). `sha256` and `size` refer to that converted file.
+- `file` is the segment converted to plain JSON Lines, not the internal segment bytes (see #016, #033). `sha256` and `size` refer to that converted file.
 
 ## 008. Design documents are HTML; decision records stay Markdown (2026-10-29)
 
@@ -104,6 +104,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 - Data URLs run with an opaque origin and have no OPFS access.
 
 **Known issue to verify:** Vite dev mode pre-bundles dependencies, which may break the worker URL. Users may need `optimizeDeps.exclude: ['opfslogd']`.
+
+> **Note (2026-11-01):** Checked in step 6. Vite 8 needs no `optimizeDeps.exclude` in dev or build, as long as the worker is created with the literal expression (#059).
 
 ## 010. Segment files are binary frames with JSON Lines payloads (2026-10-29)
 
@@ -133,6 +135,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 - `log()` must never throw. If `ctx` cannot be serialized (circular reference, `BigInt`), it is replaced with `{"_unserializable": "<reason>"}` and the record is still written.
 
 ## 012. Segment file names carry the time range and tab ID (2026-10-29)
+
+> **Amended by #034, #061, #067 (2026-11-01).** Lock names carry the namespace (`opfslogd:{namespace}:tab:{tabId}`). The main thread creates the tab ID. The two times in a closed segment name are the minimum and maximum record `ts`.
 
 **Decision:** An active segment is named `{startTs}_{tabId}.seg`. When it is moved out of `active/`, it is renamed to `{startTs}_{endTs}_{tabId}.seg` as part of the same `move()` that changes its state directory. Timestamps are zero-padded to 13 digits. The format version is not in the name; it is in the file header.
 
@@ -211,7 +215,7 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 **Trade-offs:**
 - Corruption that still parses as valid JSON is not detected. Once the segment is closed, upload's `sha256` (#007) covers the file.
-- Queries scan every line of a segment instead of skipping frames. Estimated tens of ms per 8MB segment, to be benchmarked. Queries are rare and off the write path.
+- Queries scan every line of a segment instead of skipping frames. Estimated tens of ms per 8MB segment, to be benchmarked. Queries are rare and off the write path. (Measured in step 6: about 7ms on Chromium and WebKit, 35ms on Firefox, docs/design/benchmark.html.)
 - Per-flush compression or encryption would need frames again. That would be a new format version under #013, and the v1 reader stays.
 
 
@@ -290,7 +294,11 @@ At the next flush, if any counter is above zero, the library appends one record 
 
 **To verify:** whether a page holding a Web Lock or a sync access handle can enter the back/forward cache, and what happens to its worker if it does.
 
+> **Note (2026-11-01):** In Chromium it enters the cache, and the worker keeps writing with the same handle after the page comes back (docs/design/benchmark.html). Firefox and Safari are on the manual device list.
+
 ## 021. Rotate active segments by age as well as size; the age is a public option (2026-11-01)
+
+> **Amended by #066 (2026-11-01).** The size limit is 2MB (draft), not 8MB.
 
 > **Amended by #054 (2026-11-01).** Export also reads the calling tab's active segment.
 
@@ -306,6 +314,8 @@ At the next flush, if any counter is above zero, the library appends one record 
 **Open:** 5 minutes has no basis beyond being longer than the default upload interval (1 minute) while keeping the file count moderate.
 
 ## 022. Coordination locks are taken per run and released right away; no conditions on tab state (2026-11-01)
+
+> **Amended by #034 (2026-11-01).** Lock names carry the namespace: `opfslogd:{namespace}:upload`, `opfslogd:{namespace}:retention`, `opfslogd:{namespace}:tab:{tabId}`.
 
 **Principle:** Lock handling stays simple and unconditional. Every tab follows the same rule, and no rule depends on visibility, focus, or other tab state.
 
@@ -559,7 +569,7 @@ This amends the lock names in #012 and #022. Segment file names (#012, #013) do 
 - Removing a public option is a breaking change; turning an internal constant into an option later is not.
 - The flush interval, flush size, and overload threshold are to be set by benchmark. Users have little basis for changing them, and wrong values raise main-thread cost or loss.
 - The buffer cap may matter to memory-sensitive apps, but it is measured in UTF-16 units, which is awkward to explain. Open it if users ask.
-- The segment size limit interacts with retention and upload capacity; it is revisited with those options (step 5, units 9 and 10).
+- The segment size limit interacts with retention and upload capacity; it is revisited with those options (step 5, units 9 and 10). (It was not revisited then; step 7 lowered it to 2MB, #066.)
 - The segment age limit sets the longest delay before a record can be uploaded, and that requirement differs per app.
 
 ## 036. The segment age option is `rotate.maxAgeMs` (2026-11-01)
@@ -615,6 +625,8 @@ The same rule covers every state, with no special cases:
 **Follow-up:** how subscribers recognize the drop line is settled in #044.
 
 ## 040. Internal errors go to `init({ onError })` as `OpfslogdError` with a `code` (2026-11-01)
+
+> **Amended by #064 (2026-11-01).** New code `write-failed` (a segment write failed for a reason other than quota). Write failures are reported once when they start, not on every failed flush.
 
 **Decision:**
 
@@ -754,6 +766,8 @@ upload: {
 
 ## 048. `send(file, meta)` arguments (2026-11-01)
 
+> **Amended by #066, #067 (2026-11-01).** `from` and `to` are the minimum and maximum record `ts`. Segments are at most about 2MB.
+
 **Decision:**
 
 ```ts
@@ -784,6 +798,8 @@ send(file: Blob, meta: {
 - Retention has the same problem; whether it follows the same rule is decided with the retention options.
 
 ## 050. Retention has a size limit and an age limit (2026-11-01)
+
+> **Amended by #061 (2026-11-01).** The retention run reports deleted pending segments to the main thread as counts; the main thread writes the drop line at its next flush.
 
 **Decision:** `retention.maxBytes` and `retention.maxAgeMs`. A retention run (#022):
 1. Deletes every closed segment whose end time (in its file name, #012) is older than `maxAgeMs`, whether `done` or `pending`.
@@ -830,7 +846,7 @@ Deleted `pending` segments are reported with a drop line (#019) whose `ctx.reaso
 
 ## 054. Export includes closed segments and the calling tab's active segment (2026-11-01)
 
-**Decision:** Export reads every closed segment in the namespace and the calling tab's own active segment: its worker flushes, then reads the file through its own handle. Other tabs' active segments are left out, and the result says how many were left out. This amends #021's "sealed files keep export and query away from files still being written".
+**Decision:** Export reads every closed segment in the namespace and the calling tab's own active segment: its worker flushes, then reads the file through its own handle. Other tabs' active segments are left out, and the result says how many were left out. This amends #021's "closed files also keep export and query away from files still being written".
 
 **Why:**
 - The main use is a bug report sent from the tab where the problem happened. The most important records are that tab's last few minutes, which are still in its active segment.
@@ -838,6 +854,8 @@ Deleted `pending` segments are reported with a drop line (#019) whose `ctx.reaso
 - Asking other tabs for their active data (BroadcastChannel) would add the tab-to-tab path #006 avoids, plus handling for tabs that do not answer (frozen tabs).
 
 **To verify:** whether another context can read a file while a tab holds a sync access handle on it (`getFile()`). If it can, other tabs' active segments can be added later without breaking the API.
+
+> **Note (2026-11-01, step 7):** Step 6 confirmed that `getFile()` reads such a file in Chromium, Firefox, and WebKit (docs/design/benchmark.html). Other tabs' active segments still stay out of v0.1: the gain is only their last 0-5 minutes, and reading a file while the other tab keeps writing to it was not checked (a `File` from `getFile()` may throw `NotReadableError` once the file changes). Add them when users ask and that case is verified; `skipped.activeOtherTabs` then becomes 0.
 
 ## 055. `exportLogs({ from?, to? })` returns `{ file, skipped }` (2026-11-01)
 
@@ -852,7 +870,7 @@ const { file, skipped } = await exportLogs({ from?: number, to?: number })
 - The name is `exportLogs` because `export` is a reserved word.
 - `from` and `to` limit the time range. Files are picked by the times in their names (#012) and lines by their leading `ts` (#016), without JSON parsing.
 - `skipped.activeOtherTabs` counts other tabs' active segments left out (#054). `skipped.unreadable` counts files in a newer format (#013). These are information, not errors, so they are returned rather than sent to `onError`.
-- No level or text filters; that is query's job (step 5, unit 12).
+- No level or text filters. There is no query API in v0.1 (#057).
 
 **Why:**
 - A `Blob` works directly with `URL.createObjectURL` for a download link or as a `fetch` body, and matches `send()`'s file (#048).
@@ -907,3 +925,142 @@ Measurements that need the implementation (flush interval and size #017, drops u
 - No result would change the decision. Using msgpackr would add a runtime dependency; the package has none and keeps it that way.
 - Serialization already meets the target: under 1 µs for a medium record, 6.5 µs for a large one on Chromium with 4x CPU throttling (docs/design/benchmark.html).
 - JSONL was also chosen because people can read it and it exports as is (#016). A faster binary encoder does not give that.
+
+## 061. The main thread owns the tab ID and `seq`; every record line comes from a main-thread flush (2026-11-01)
+
+**Decision:**
+- The main thread creates the tab ID at `init()` and passes it to the worker. The worker uses it for the tab lock (#012, #034) and segment names. This replaces "the worker creates the tab ID" in storage-format.html.
+- Every record line in a segment comes from a main-thread flush. The worker never writes record lines itself; it writes only header lines.
+- The main thread counts the lines it sends, so it knows each record's `seq` when it builds the subscriber batch (#042). The worker sets a new segment's `seq0` from the number of lines it has written so far (#016). The two counts match because both see the same lines.
+- Events that happen in the worker and should appear in the log (pending segments deleted by retention, #050) are sent to the main thread as counts. The main thread writes them as a drop line (#019) at its next flush. When such counts arrive, the main thread treats the queue as not empty and starts the flush timer (#017).
+
+**Why:**
+- Subscribers receive `tab` and `seq` (#042), and they are called before the batch is sent to the worker (#023). The main thread must know both values at that point, without waiting for the worker.
+- If the worker inserted its own lines, the main thread's `seq` would drift from the file's line index.
+- Overload drop lines (#019) are already written by the main thread, so retention drops use the same path.
+
+**Rejected:**
+- The worker owns `seq` and returns it in the ack: subscribers would have to wait for the ack, which #023 rejected.
+- Leaving `seq` out of subscriber records: breaks "same shape as an exported line" (#042).
+
+**Trade-off:** a retention drop line waits for the next flush of the tab that ran retention. If that tab closes within that interval, the line is lost. Only the record of the deletion is lost, not log content.
+
+## 062. Outside a browser page, the library does nothing (2026-11-01)
+
+**Decision:** When the module is imported, it checks `typeof document === 'undefined'` once. If there is no `document` (Node, Deno, Bun, SSR, a Web Worker), the logger starts in the closed state (#030) and stays there: `log()` returns at once, and `init()`, `setContext()`, `subscribe()`, and `flush()` do nothing. No warning or error is printed. The library works only in a browser page.
+
+**Why:**
+- SSR frameworks (Next.js, Nuxt, SvelteKit) run the same component code on the server. Without this, `log()` calls there would fill the before-`init()` queue (#028) up to the cap in a long-lived server process and keep paying serialization for records that can never be written. An `init()` reached on the server would print `opfs-unavailable` in every server process.
+- It follows #041: a logger with nowhere to write must not cost anything. It reuses the closed state instead of adding one.
+- The check runs once at import, so `log()` pays nothing for it.
+- No warning, because running on the server is normal SSR use, not a mistake. A warning would show for every SSR user (the same reason #034 avoids false warnings).
+- Prior art: browser SDKs such as Datadog Browser SDK and PostHog do nothing on the server.
+
+**Trade-off:** logs called on the server are not kept anywhere. The README says so.
+
+## 063. `exportLogs()` outside the running state resolves at once with an empty result (2026-11-01)
+
+**Decision:** When the logger is not running (before `init()`, after `close()`, after `opfs-unavailable` or `worker-load-failed` (#041), or outside a browser page (#062)), `exportLogs()` resolves at once with an empty `Blob` and `skipped` counts of 0. It never rejects.
+
+**Why:**
+- Same rule as `flush()` (#038), which returns `true` at once after `close()`. One rule for every state, no special cases.
+- "No logs" and "could not read" look the same, but the app can tell them apart where it matters: a storage failure was already reported through `onError` (#041), and a call before `init()` is a developer mistake that shows up as an empty file during development.
+- After `close()` for a consent withdrawal (#030), handing out stored logs would go against the reason for closing.
+- Tests call `exportLogs()` before `close()`.
+
+**Rejected:**
+- Rejecting with an `OpfslogdError`: callers would need try/catch, against the rule that the library does not throw into app code (#040) and against `flush()` never rejecting.
+- Per-state behavior (wait for `init()` with a timeout, start a temporary worker after `close()`): state-dependent rules and a second worker lifecycle for rare uses.
+
+## 064. Any failed segment write is rolled back, acked as failed, counted as dropped, and followed by a rotation (2026-11-01)
+
+**Decision:** When `handle.write()` throws, for any reason:
+1. The worker truncates the file back to the offset before the write, so no partial line stays in the segment.
+2. The worker still acks the flush, as `{ id, ok: false }`. The main thread subtracts it from `inFlight` as usual (#018) and adds the flush's line count to the drop counters. The next flush writes a drop line (#019) with `ctx.reason` `"quota"` for `QuotaExceededError` and `"write-failed"` for anything else.
+3. The lost lines keep their `seq` numbers, since subscribers already received them (#061). The worker rotates, so the gap falls between segments: the next segment is opened at the next write, with `seq0` equal to the number of lines the worker has **received**. The flush message carries its line count, so the worker does not have to count newlines. If opening the new segment also fails, that flush takes the same path.
+4. `onError` gets `quota-exceeded` or the new code `write-failed` (#040) once when failures start. It is called again only after a successful write followed by a new failure.
+5. Freeing space is left to the normal retention schedule (#053). No extra trigger.
+
+**Why:**
+- A partial write followed by later appends leaves a broken line in the middle of a segment. Crash recovery (#016) truncates at the first bad line, so every good line after it would be lost too.
+- Without an ack, `inFlight` never shrinks, #019 rejects everything, and the main thread reports `worker-unresponsive` by mistake.
+- The main thread counted the lines as sent and gave them `seq` numbers (#061); it cannot take them back. Rotation keeps `seq = seq0 + line index` true inside every segment, with an existing mechanism (#021).
+- One path for every write error, with the error name deciding only `reason` and the error code. No per-cause branches.
+- While storage is full, every flush (about 5 per second) fails. Reporting each one would flood error trackers.
+- If the device is full below the retention limit, an early retention run would free little.
+
+**Rejected:**
+- Rolling back `seq` on the main thread: subscribers already have the numbers.
+- A gap marker line inside the segment: breaks #016's "every line starts with `ts` and `lv`" and "`seq` is the line index", as in #031.
+
+**To verify (implementation):** whether browsers write part of the data before throwing `QuotaExceededError`. The truncate stays either way; it costs almost nothing.
+
+## 065. No `persist()` option; apps call `navigator.storage.persist()` themselves (2026-11-01)
+
+**Decision:** The library never calls `navigator.storage.persist()` and has no option for it. The README tells apps that need logs to survive storage pressure to call it themselves. This replaces architecture.html's "the user turns it on with an option".
+
+**Why:**
+- Persistence applies to the whole origin (IndexedDB, caches, everything), not just logs. That is the app's decision, not a logging library's.
+- Firefox shows a permission prompt for it. A logging option should not put a permission request in front of the app's users.
+- It is one line in app code. An option wrapping it adds nothing.
+- Logs are diagnostic and stored best effort (#019, #064). Losing them under storage pressure does not break the app.
+- It can be added later without breaking the API (#035).
+
+## 066. Segment size limit drops from 8MB to 2MB (draft, internal) (2026-11-01)
+
+**Decision:** The worker rotates at 2MB instead of 8MB (#021). It stays an internal constant (#035). The value is a draft to confirm by measurement.
+
+**Why:** 8MB came from step 1 with no basis, and #035's promise to revisit it with the retention and upload options was not kept. At about 200 bytes per record (#052), 8MB collides with later decisions:
+- Upload timeout: 8MB over a 1Mbps link takes about 64 seconds, past the 60-second `upload.timeoutMs` default (#045). A full segment would time out on every run, and since a run stops at its first failure (#046), the segments behind it would never upload.
+- Active segments count toward `retention.maxBytes` but cannot be deleted (#052). Five tabs with full 8MB active segments hold 40MB of the 50MB default.
+- Each retention deletion removes 16% of 50MB at once.
+
+At 2MB: about 16 seconds at 1Mbps, 10MB for five full active segments, 4% per deletion. The size limit only matters above about 35 records per second (below that, the 5-minute age limit rotates first), so apps that log little see no difference.
+
+**Trade-off:** apps that log a lot send about 4 times as many uploads (about 6 per minute at 1,000 records per second). A very small `retention.maxBytes` (near 2MB) still deletes coarsely; deriving the segment size from it was rejected as an extra rule.
+
+**To measure (implementation, devices):** upload time of a 2MB segment on slow mobile links, upload request rate for high-volume apps, retention behavior with several tabs open.
+
+## 067. File-name times are the minimum and maximum `ts` of the segment's records (2026-11-01)
+
+**Decision:** In a closed segment name `{startTs}_{endTs}_{tabId}.seg` (#012), `startTs` is the smallest and `endTs` the largest `ts` of the records in the file. `meta.from` and `meta.to` of `send()` (#048) are the same two values. This makes "first" and "last" record in #012 and #048 exact.
+- Each flush message carries the batch's minimum and maximum `ts`. The main thread knows every `ts` at `log()` time, so this is two comparisons per call.
+- The worker keeps a running minimum and maximum per segment and uses them in the name when the segment leaves `active/`.
+- Orphan recovery already checks every line (#016) and computes the two values then.
+- An active segment is named with the minimum `ts` of its first write. Its own tab's export uses the worker's in-memory values, so the active name needs no update.
+- The file-name format does not change (#013); only the meaning of the values becomes exact.
+
+**Why:** Four things rely on these times: export file selection (#055), merge order (#056), retention age (#050), and `meta.from`/`to` (#048). Two cases put records outside the range with "creation time" and "last record" semantics:
+- Records queued before `init()` (#028) are older than the file.
+- When the wall clock jumps back (#011), the last record is not the latest. `endTs` then looks too old, so retention could delete the file early and `exportLogs({ from })` could skip it.
+
+## 068. Tabs with different `upload` settings: each closed segment follows the setting of the tab that closes it (2026-11-01)
+
+**Decision:** No change in behavior; this records it. A segment goes to `pending/` or `done/` according to the `upload` setting of the tab that closes it: the owner tab when it rotates or closes (#021, #030), or the retention holder when it recovers an orphan (#012). Segments closed while `upload` was not set are in `done/` and are never uploaded later, even if another tab with `upload` comes along. The README and api.html state this.
+
+Settings mix in three cases:
+1. Right after a deploy that first adds `upload`: old tabs without it run next to new tabs with it for a while.
+2. Conditional upload: only for users who consented, or for sampled sessions.
+3. Orphan recovery: the recovering tab's setting decides where the orphan goes.
+
+**Why:**
+- It is the existing rule ("the tab that holds the lock uses its own config", #006) applied to segment state.
+- For consent and sampling (case 2) it is the right behavior: logs from a period without upload are not uploaded later.
+- Case 1 happens once per such deploy, for a few minutes, and those logs stay on the device. Case 3 decides only whether a file is uploaded; no data is damaged.
+
+**Rejected:** always moving closed segments to `pending/` and reaching `done/` only by upload. Apps without `upload` would have every retention deletion reported as a deleted pending segment (#050), unless drop lines got an extra "only with upload" condition. It would also upload logs from before a consent once upload is turned on.
+
+## 069. No minimum level option in v0.1; callers decide whether to log (2026-11-01)
+
+**Decision:** There is no `level` option and no extra argument for it. Code that should not log in some environments checks for itself:
+
+```ts
+if (isDev) logger.debug('scroll', { y })
+```
+
+**Why:**
+- An `{ enabled }` argument would do what an `if` already does, and would break the `(msg, ctx?)` shape (#024), the same reason #025 rejected a third argument.
+- An `if` at the call site is cheaper than any library check: the `ctx` object is never built.
+- `init({ level })` can be added later without breaking the API (#035).
+
+**Trade-off:** apps cannot turn off `debug` in one place, and calls from third-party packages that log to this logger cannot be filtered. In production, `debug` records fill retention (#052) and upload volume faster. Revisit if users ask.
