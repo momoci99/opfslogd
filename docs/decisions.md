@@ -215,6 +215,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 ## 017. Flush triggers: lazy 200ms timer, 256K-character size, and error with a 50ms gap (2026-11-01)
 
+> **Note (2026-11-01):** 200ms has no basis. It was an example value in the step-1 targets. Pick the interval by benchmark: the shortest interval at which flush cost stays at or below 1% of main-thread time on a low-end mobile device. For reference, batching delays elsewhere follow the cost of one send: Logback/Log4j2 async have no delay, Kafka `linger.ms` is 5ms, OpenTelemetry log batching and Fluent Bit flush are 1s (network). Our flush stays inside the tab, so it is likely tens of microseconds and the interval can probably be shorter than 200ms.
+
 **Decision:** The main thread flushes its string queue when any of these is true. The numbers are drafts to tune by benchmark.
 - **Timer:** when the first record enters an empty queue, start a 200ms timer. No timer runs while the queue is empty.
 - **Size:** the queue holds more than 256K characters.
@@ -241,3 +243,91 @@ Flushes on `visibilitychange` / `pagehide` and a user-called `flush()` are decid
 - A stop in acks also tells the main thread that the worker has died or hung.
 
 **Known effect:** Acks are handled as main-thread tasks. While the main thread runs a long task, `inFlight` looks larger than it is, so rejection starts early. This errs toward dropping low-level records, never toward exceeding the cap. Rejection thresholds should allow for it.
+
+## 019. Overload: reject debug and info at 80%, everything at 100%; record drops as one line per flush (2026-11-01)
+
+**Decision:** Before serializing, `log()` checks usage (`queue size + inFlight`, #018) against the cap (draft 4M characters).
+- Below 80%: accept everything.
+- 80% or more: reject `debug` and `info`. Accept `warn` and `error`.
+- 100%: reject everything, including `error`.
+
+A rejected record is never stored. Only per-level counters go up. `log()` returns at once and does not throw.
+
+At the next flush, if any counter is above zero, the library appends one record and resets the counters:
+
+```json
+{"ts":1793251200400,"lv":"warn","msg":"opfslogd: records dropped","ctx":{"reason":"overload","dropped":{"debug":1200,"info":300},"from":1793251200210,"to":1793251200390}}
+```
+
+`from` and `to` are the times of the first and last drop. Field names are a draft. Telling the app about drops (a callback) is decided with the public API.
+
+**Why:**
+- Overload usually comes from a flood of low-level records, and something going wrong often happens during that flood. A level-blind cap (S1) would drop the error that matters most. Rejecting low levels first keeps the last 20% for `warn` and `error`.
+- The thresholds cannot be exact: ack delay (#018), string length versus real memory, and an arbitrary cap all blur them. The rule only needs low levels to be cut before high ones, which still holds when the real cut point moves.
+- Prior art: Logback's `AsyncAppender` drops TRACE/DEBUG/INFO when less than 20% of its queue is free. OpenTelemetry, Sentry, and sonic-boom drop new items regardless of level. journald writes a "Suppressed N messages" line into the log. Sentry tags drops with a reason.
+- Blocking when full (Logback and Log4j2 default) is not possible: `log()` runs on the main thread.
+- At 100% even `error` is rejected. Unbounded growth could crash the tab and lose everything.
+- Checking before `JSON.stringify` makes a rejected `log()` cheaper than an accepted one, which helps exactly when the main thread is under load.
+- One drop line per flush at most, so the drop record cannot itself flood the log. It is an ordinary record, so export, query, and upload need no special case. The `reason` field leaves room for other causes later (for example, pending segments deleted by retention, #007).
+
+**Rejected:** four steps (50/75/90/100%), which added numbers to tune with no prior art; no cap, which risks crashing the tab.
+
+## 020. On hide and close, flush only; sealing is left to orphan recovery (2026-11-01)
+
+**Decision:**
+- `visibilitychange` to `hidden`: flush at once.
+- `pagehide`: flush at once, best effort.
+- Neither event seals the segment. When the tab goes away, its `opfslogd:tab:{tabId}` lock is released and the retention holder recovers and seals the orphaned `active/` file (#012). A normal close and a crash take the same path.
+- While hidden, timers are throttled (about 1s, and up to 1 minute in Chrome after a long time hidden). `log()` therefore also flushes when the oldest queued record is older than the flush interval. Records logged last, with no later `log()` call, still wait for the delayed timer.
+
+**Why:**
+- On mobile, a backgrounded page is often killed by the OS with no `pagehide`. `hidden` is the last event that reliably arrives while the page and its worker are still running (Chrome's Page Lifecycle guidance says the same).
+- During `pagehide` the document and its dedicated worker are being torn down, so a posted message may never be written.
+- Sealing closes the handle and calls `move()` asynchronously in the worker. It may not finish while the page is torn down, and orphan recovery already covers the case. Doing it on close adds an unreliable step that duplicates an existing path.
+- Sealing on every `hidden` would create many tiny segments for users who switch tabs often.
+
+**To verify:** whether a page holding a Web Lock or a sync access handle can enter the back/forward cache, and what happens to its worker if it does.
+
+## 021. Seal active segments by age as well as size; the age is a public option (2026-11-01)
+
+**Decision:** The worker seals its active segment and opens a new one when the segment reaches the size limit (default 8MB) **or** has been open for a set time (draft default 5 minutes) and is not empty. This applies whether or not `upload` is configured. The age is a public option; its name and place are decided with the public API (step 5).
+
+**Why:**
+- Only sealed segments in `pending/` are uploaded. With size-only sealing, a long-lived tab writing 1MB per hour would upload once every 8 hours, even with `upload.intervalMs` set to one minute.
+- Since #020, closing a tab no longer seals. Sealing on close never helped long-lived tabs anyway.
+- Sealing by age is an ordinary worker action on its own file, so it has none of the teardown problems of sealing on close.
+- One rule with or without upload keeps behavior simple. Sealed files also keep export and query away from files still being written.
+- At 5 minutes there are at most 288 segments per tab per day. Retention deletes whole files, so more files do not change how it works.
+
+**Open:** 5 minutes has no basis beyond being longer than the default upload interval (1 minute) while keeping the file count moderate.
+
+## 022. Coordination locks are taken per run and released right away; no conditions on tab state (2026-11-01)
+
+**Principle:** Lock handling stays simple and unconditional. Every tab follows the same rule, and no rule depends on visibility, focus, or other tab state.
+
+**Decision:**
+- `opfslogd:upload` and `opfslogd:retention`: each tab, on its own timer, calls `navigator.locks.request(name, { ifAvailable: true }, ...)`. If it gets the lock, it does one run (upload the pending segments, or one retention pass) and releases the lock when the run ends. If not, it skips this round.
+- `opfslogd:tab:{tabId}`: held by the worker for its whole life, as in #012. It means "this tab is alive".
+- `steal` is never used.
+
+**Why:**
+- Before, the uploader held its lock indefinitely. Browsers freeze hidden tabs, and a frozen tab keeps its locks, so a frozen holder stopped uploads for every tab.
+- A frozen tab runs no timers, so it never tries to take a lock. The problem mostly disappears without any visibility logic.
+- Releasing on `hidden` (the earlier candidate) adds state transitions and would stop uploads from a background tab that is not frozen, which works against #021.
+- `steal` would create two uploaders once the frozen tab wakes up.
+- The tab lock must stay held while frozen: a frozen tab is alive, and its active file must not be recovered by another tab.
+
+**Remaining risk:** if a tab freezes in the middle of a run, the lock stays held until it wakes. This needs a tab to freeze right after starting a run, and only delays that work.
+
+**Open (step 5):** a `send()` that never settles also holds the upload lock. Whether `send()` gets an `AbortSignal` or a timeout is decided with the public API.
+
+## 023. `subscribe()` ships in v0.1 and receives each flush batch (2026-11-01)
+
+**Decision:** Same-tab `subscribe(fn)` is part of v0.1. At each flush, after the batch is built and before it is transferred, the main thread calls every subscriber once with that batch. Subscribers get exactly what goes to the file: accepted records plus the drop line (#019), never rejected records. A subscriber that throws is isolated and does not affect logging. With no subscribers the cost is zero. The shape of the argument (strings or parsed objects) and the API are decided in step 5.
+
+**Why:**
+- Use cases: in-app debug panels (devices where DevTools is hard to open), routing to the console during development, and tests.
+- Calling subscribers inside `log()` would put app code on the write path: a slow or throwing subscriber would slow `log()`, and passing the original object would bring back the mutation problem #014 avoided.
+- Waiting for the worker ack would add latency and tie subscriber delivery to ack handling, for a guarantee ("it is on disk") that a live viewer does not need.
+- A delay of up to one flush interval is not noticeable in a viewer, and it shrinks if the benchmark picks a shorter interval (#017).
+- Users could wrap the logger themselves, but the library can deliver exactly what was stored, including drop lines.

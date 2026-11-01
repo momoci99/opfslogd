@@ -21,8 +21,8 @@
   <tr><td>1. 요구사항과 성능 목표</td><td><span class="tag ok">완료</span></td><td><a href="architecture.html#requirements">architecture.html</a></td><td>—</td></tr>
   <tr><td>2. 쓰기 아키텍처, 업로드, Worker 배포</td><td><span class="tag ok">완료</span></td><td><a href="architecture.html">architecture.html</a></td><td>#006, #007, #009</td></tr>
   <tr><td>3. 저장 포맷</td><td><span class="tag ok">완료</span></td><td><a href="storage-format.html">storage-format.html</a></td><td>#010(→#016) ~ #013</td></tr>
-  <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag warn">진행 중</span></td><td><a href="protocol.html">protocol.html</a></td><td>#014 ~ #018</td></tr>
-  <tr><td>5. 공개 API</td><td>대기</td><td>—</td><td>—</td></tr>
+  <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag ok">완료</span></td><td><a href="protocol.html">protocol.html</a></td><td>#014 ~ #023</td></tr>
+  <tr><td>5. 공개 API</td><td><span class="tag warn">다음</span></td><td>—</td><td>—</td></tr>
   <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td>대기</td><td>—</td><td>—</td></tr>
 </table>
 </div>
@@ -31,39 +31,42 @@
 <ul>
   <li>대상: 최신 데스크톱 + 모바일 브라우저. 초당 수천 건 이상. 목표 수치는 <a href="architecture.html#targets">성능 목표</a> 참고.</li>
   <li>탭마다 Dedicated Worker가 sync access handle로 자기 세그먼트에 씁니다. SharedWorker는 쓰지 않습니다.</li>
-  <li>여러 탭 중 하나만 해야 하는 일(보존 정리, 업로드, 주인 없는 파일 복구)은 Web Locks로 조율합니다.</li>
+  <li>여러 탭 중 하나만 해야 하는 일(보존 정리, 업로드, 주인 없는 파일 복구)은 Web Locks로 조율합니다. 업로드와 보존 정리 Lock은 실행할 때만 잡고 바로 놓습니다. 탭 상태에 따른 조건은 없습니다(#022).</li>
   <li>업로드는 사용자가 넘기는 <code>send()</code> 콜백으로 합니다. resolve되면 done, reject되면 재시도합니다.</li>
-  <li>세그먼트 상태: <code>active</code> → <code>pending</code> → <code>done</code> → 삭제. 용량을 넘으면 done부터, 그다음 오래된 pending부터 삭제합니다.</li>
+  <li>세그먼트 상태: <code>active</code> → <code>pending</code> → <code>done</code> → 삭제. 크기(8MB)나 시간(초안 5분)으로 봉인합니다(#021). 탭이 닫힐 때는 봉인하지 않고 주인 없는 파일 복구에 맡깁니다(#020).</li>
   <li>Worker는 별도 파일로 배포하고 <code>workerUrl</code> 옵션을 둡니다. 인라인 빌드는 하지 않습니다.</li>
-  <li>세그먼트는 JSON 헤더 한 줄 + 순수 JSON Lines입니다. 바이너리 프레임과 CRC32는 쓰지 않습니다(#016, 4단계에서 #010을 고침). 외부로는 tab, seq, 전역 context를 채운 JSONL을 내보냅니다.</li>
-  <li><code>log()</code>를 호출할 때 바로 <code>JSON.stringify</code>합니다(#014). 메인 스레드 버퍼는 문자열 배열 + 길이 카운터이고, flush마다 새 버퍼 하나를 Worker로 transfer합니다(#015).</li>
-  <li>레코드 필드는 <code>ts</code>(<code>Date.now()</code>), <code>lv</code>, <code>msg</code>, <code>ctx</code>, <code>err</code>입니다. tab, seq, 전역 context는 헤더에 둡니다.</li>
+  <li>세그먼트는 JSON 헤더 한 줄 + 순수 JSON Lines입니다. 바이너리 프레임과 CRC32는 쓰지 않습니다(#016). 외부로는 tab, seq, 전역 context를 채운 JSONL을 내보냅니다.</li>
+  <li>레코드 필드는 <code>ts</code>(<code>Date.now()</code>), <code>lv</code>, <code>msg</code>, <code>ctx</code>, <code>err</code>입니다. tab, seq, 전역 context는 헤더 줄에 둡니다.</li>
+  <li>쓰기 경로(<a href="protocol.html">protocol.html</a>): <code>log()</code> 때 <code>JSON.stringify</code>(#014) → 문자열 큐(#015) → 주기·크기·error 조건으로 flush(#017) → Worker가 쓰고 ack(#018). hidden과 <code>pagehide</code> 때도 flush(#020).</li>
+  <li>과부하: 메인 버퍼 + 응답 안 온 양이 80%면 debug·info 거절, 100%면 전부 거절. 버린 건수는 flush 때 한 줄로 남깁니다(#019).</li>
+  <li>같은 탭 <code>subscribe()</code>는 v0.1에 포함하고, flush 때 묶음을 넘깁니다(#023).</li>
+  <li>숫자(flush 주기 200ms, 256K자, 4M자, 80%, 세그먼트 5분)는 초안이며 벤치마크로 정합니다. flush 주기는 "저사양 모바일에서 flush 비용 ≤ 메인 스레드 1%인 가장 짧은 간격"으로 고릅니다.</li>
   <li>압축은 보류합니다.</li>
 </ul>
 
-<h2 id="next">4단계에서 다룰 것</h2>
-<p>이전 단계에서 넘어온 항목도 포함합니다.</p>
+<h2 id="next">5단계(공개 API)에서 다룰 것</h2>
+<p>이전 단계에서 넘어온 항목입니다.</p>
 <ul>
-  <li><s>버퍼에 담는 형태</s> → <code>log()</code> 때 직렬화 (#014), 링버퍼 대신 문자열 큐 (#015)</li>
-  <li><s>프레임 헤더를 누가 만들지</s> → 프레임 헤더 제거 (#016)</li>
-  <li><s>flush 시점</s> → 200ms 타이머(데이터 있을 때만) + 256K자 + error(50ms 간격) (#017)</li>
-  <li><s>Worker 응답과 버퍼 상한</s> → flush마다 ack, 상한(초안 4MB)은 메인 버퍼 + 응답 안 온 양 (#018)</li>
-  <li><strong><code>pagehide</code> / <code>visibilitychange</code> 처리:</strong> 닫힐 때 최선의 flush, 세그먼트 봉인</li>
-  <li><strong>과부하 시 버리기:</strong> debug부터 버리고 error는 보존. 버린 건수를 레코드로 남기는 방식</li>
-  <li><strong>백그라운드에서 멈춘 탭의 Lock:</strong> 업로드 Lock을 쥔 채 멈추는 문제. 숨겨질 때 Lock을 내려놓는 방안 (<a href="architecture.html#upload">업로드</a>의 위험 항목)</li>
-  <li><strong>같은 탭 안 <code>subscribe()</code></strong>를 어느 지점에서 호출할지 (flush 전 또는 후)</li>
+  <li><code>init()</code> 옵션 전체: <code>workerUrl</code>, <code>upload</code>(<code>send</code>, <code>intervalMs</code>), <code>retention</code>, 세그먼트 시간 상한(#021), 네임스페이스</li>
+  <li>전역 context: <code>init({ context })</code> 옵션 이름과, 내보낸 JSONL에서 이를 담는 필드 이름</li>
+  <li><code>log</code> API 모양: 레벨별 메서드, <code>ctx</code>와 <code>err</code>를 넘기는 방법</li>
+  <li><code>subscribe()</code>가 넘기는 형태(문자열 또는 객체)와 해제 방법 (#023)</li>
+  <li>사용자가 직접 부르는 <code>flush()</code> (#017)</li>
+  <li>버린 건수와 오류를 앱에 알리는 콜백 (#019, 1단계 "오류는 콜백으로만")</li>
+  <li><code>send()</code>가 끝나지 않을 때를 위한 <code>AbortSignal</code> 또는 timeout (#022)</li>
+  <li><code>export</code>, <code>query</code> API 모양</li>
 </ul>
 
-<h2 id="later">5단계 이후로 넘긴 것</h2>
+<h2 id="later">나중으로 넘긴 것</h2>
 <ul>
-  <li>내보낸 JSONL에서 전역 context를 담는 필드 이름. <code>init({ context })</code> 옵션 이름과 함께 정합니다.</li>
   <li>세그먼트 헤더 줄의 키 이름. 구현할 때 정합니다.</li>
-  <li>검증할 것 목록: <a href="architecture.html#verify">architecture.html</a>, <a href="storage-format.html#verify">storage-format.html</a></li>
+  <li>검증할 것 목록: <a href="architecture.html#verify">architecture.html</a>, <a href="storage-format.html#verify">storage-format.html</a>, <a href="protocol.html#verify">protocol.html</a></li>
 </ul>
 
 <h2 id="process">진행 방식</h2>
 <ul>
   <li>질문은 한 번에 하나씩 합니다.</li>
+  <li>Lock 설계는 조건 없이 단순하게 둡니다. 모든 탭이 같은 규칙을 따르고, 탭 상태에 따라 달라지는 규칙을 만들지 않습니다(#022).</li>
   <li>구성 요소나 기능을 추가하기 전에 "정말 필요한가"를 먼저 따집니다.</li>
   <li>결정은 <code>docs/decisions.md</code>에 짧게, 설계 설명은 이 디렉터리의 HTML에 씁니다. 같은 내용을 두 곳에 쓰지 않습니다.</li>
 </ul>
