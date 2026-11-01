@@ -24,6 +24,8 @@
   <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag ok">완료</span></td><td><a href="protocol.html">protocol.html</a></td><td>#014 ~ #023</td></tr>
   <tr><td>5. 공개 API</td><td><span class="tag ok">완료</span></td><td><a href="api.html">api.html</a></td><td>#024 ~ #057</td></tr>
   <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td><span class="tag ok">완료</span></td><td><a href="benchmark.html">benchmark.html</a></td><td>#058 ~ #060</td></tr>
+  <tr><td>7. 설계 점검과 보완</td><td><span class="tag warn">다음</span></td><td>—</td><td>—</td></tr>
+  <tr><td>8. 구현</td><td>—</td><td>—</td><td>—</td></tr>
 </table>
 </div>
 
@@ -55,6 +57,13 @@
   <li>Vite 8: 설정 없이 dev와 build 모두 됩니다. Worker는 한 식으로만 만듭니다(#059).</li>
   <li>속도: #014, #015, #016 유지. flush 한 번은 최대 약 1,400줄(#042 메모 추가). msgpackr 비교는 뺐습니다(#060).</li>
   <li>남은 측정은 <a href="benchmark.html#impl">구현 단계</a>와 <a href="benchmark.html#manual">실기기 목록</a>으로 넘겼습니다.</li>
+</ul>
+
+<h2 id="review">7단계(설계 점검과 보완)에서 다룰 것</h2>
+<ul>
+  <li>1~6단계 문서와 결정 사이의 어긋남. 예: 나중 결정으로 바뀌었는데 앞 문서에 남은 가정(#042의 2만 건 같은 것)</li>
+  <li>구현에 필요한데 아직 정하지 않은 것. 예: 세그먼트 헤더 줄의 키 이름(아래 "나중으로 넘긴 것")</li>
+  <li>보완을 마친 뒤 8단계 구현으로 넘어갑니다. 구현 단계에서 할 측정은 <a href="benchmark.html#impl">benchmark.html</a>에 있습니다.</li>
 </ul>
 
 <h2 id="later">나중으로 넘긴 것</h2>
