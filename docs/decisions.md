@@ -45,6 +45,8 @@ new SharedWorker(new URL('./worker.js', import.meta.url), { type: 'module', name
 
 **Known limit:** jsdom has no OPFS, Workers, or Web Locks. Once that code exists, switch to Vitest browser mode (Playwright) to test against a real browser.
 
+> **Note (2026-11-01):** Vitest browser mode is now set up as a second project (`browser`) next to jsdom (`unit`), in step 6 (#058).
+
 ## 006. Each tab writes its own files from a Dedicated Worker; no SharedWorker (2026-10-29)
 
 **Decision:** Each tab starts its own Dedicated Worker. That worker opens its own OPFS segment files with `createSyncAccessHandle()` and is the only writer of those files. Tabs do not send log records to each other. Cross-tab jobs (retention, upload) are coordinated with Web Locks. There is no SharedWorker.
@@ -676,6 +678,8 @@ subscribe((records) => {
 
 **To verify:** parse cost per flush during a burst (about 20,000 records per flush at 100k/s).
 
+> **Note (2026-11-01):** The 20,000 figure predates the 256K-character size trigger (#017). One flush holds at most about 1,400 medium records. Measured: about 0.7ms per flush on Chromium, about 2.9ms with 4x CPU throttling; a sustained 100k/s burst costs 5-20% of main-thread time while a subscriber is attached. Acceptable for a debugging feature (#043). See docs/design/benchmark.html.
+
 ## 043. `subscribe(fn)` returns an unsubscribe function; its documented purpose is debugging (2026-11-01)
 
 **Decision:**
@@ -871,3 +875,35 @@ const { file, skipped } = await exportLogs({ from?: number, to?: number })
 - The uses are covered: bug report files by `exportLogs({ from, to })` (#055), live debug panels by `subscribe()` (#042), server-side search by upload. An in-app view of past logs can parse the lines of a short `exportLogs()` range; it is a debugging use, so the cost is acceptable.
 - A query API brings filters, result limits, paging, and object results into the public API, and its shape is hard to change once published (#035). It should follow real requests.
 - The storage format already supports it (`ts` and `lv` at fixed positions, #016), so it can be added later without breaking anything. The segment scan benchmark (#016) stays, since export's time filter uses the same scan.
+
+## 058. Step 6 covers only browser API checks and benchmarks that need no library code (2026-11-01)
+
+**Decision:** Step 6 builds the environment for two kinds of checks, run in desktop Chromium, Firefox, and WebKit through Playwright:
+
+1. Whether browser APIs behave as the design assumes: `move()` inside OPFS, `getFile()` on a file another worker holds a sync access handle on (#054), bfcache with a held Web Lock or sync access handle (#020), the worker path under Vite dev mode (#009). These run first, since a failure changes the design.
+2. Speed measurements that need no library code: `JSON.stringify` of one record (#014), keeping strings vs `encodeInto` per call (#014, #015), `JSON.parse` of one flush batch (#042), scanning an 8MB segment (#016), JSON vs msgpackr (#016).
+
+Measurements that need the implementation (flush interval and size #017, drops under bursts #018 #019, `pagehide` flush rate #020, GC cost #015, memory per worker) move to the implementation stage. Checks that need real devices or long runs (mobile Safari quota and eviction, ITP 7-day limit #051, freezing of lock holders #022, upload on slow networks #045, upload pile-up after an outage #047) become a manual checklist.
+
+**Why:**
+- Playwright's WebKit is not Safari, and Playwright cannot run on phones; CPU throttling in Chromium only approximates a low-end phone. Vitest browser mode fits desktop-engine checks, not mobile numbers.
+- Flush and overload numbers depend on the real write path; measuring a stand-in would decide them twice.
+
+## 059. Create the worker with the literal `new Worker(new URL('./worker.js', import.meta.url), ...)` expression; never hold the URL in a variable (2026-11-01)
+
+**Decision:** The default worker is always created with `new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opfslogd' })` written as one expression. When `workerUrl` is given, a separate branch calls `new Worker(options.workerUrl, ...)`. The two calls stay duplicated on purpose; do not merge them into `new Worker(options.workerUrl ?? new URL(...))` or pass a `URL` held in a variable. In the implementation stage, a test checks that the built `dist` still contains the literal expression.
+
+**Why:**
+- Bundlers recognize a worker only by this exact expression. In Vite 8, a URL held in a variable works in dev, but `vite build` treats `worker.js` as a small asset and inlines it as a `data:` URL. A `data:` URL worker has an opaque origin, so OPFS fails with `SecurityError: Storage directory access is denied` (#009). The failure shows only in production builds.
+- With the literal expression, Vite 8 works in dev without `optimizeDeps.exclude` and in build (`pnpm check:vite`, docs/design/benchmark.html).
+
+**Not checked yet:** bundlers other than Vite.
+
+## 060. No JSON vs msgpackr benchmark (2026-11-01)
+
+**Decision:** The planned comparison of `JSON.stringify` with msgpackr (#016) is dropped.
+
+**Why:**
+- No result would change the decision. Using msgpackr would add a runtime dependency; the package has none and keeps it that way.
+- Serialization already meets the target: under 1 µs for a medium record, 6.5 µs for a large one on Chromium with 4x CPU throttling (docs/design/benchmark.html).
+- JSONL was also chosen because people can read it and it exports as is (#016). A faster binary encoder does not give that.

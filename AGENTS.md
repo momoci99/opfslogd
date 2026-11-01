@@ -13,10 +13,13 @@ Guide for AI coding agents working in this repo. Human contributors: see [CONTRI
 | Command | Purpose |
 |---|---|
 | `pnpm install` | Install deps |
-| `pnpm test` | Vitest, single run |
+| `pnpm test` | Vitest, single run: `unit` (jsdom) and `browser` (Chromium, Firefox, WebKit) projects |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm build` | tsdown → `dist/` (ESM + `.d.ts` + sourcemap) |
 | `pnpm lint:pkg` | publint check of `package.json` exports |
+| `pnpm exec playwright install chromium firefox webkit` | Browsers for the `browser` project (once) |
+| `pnpm bench` / `pnpm bench:serve` | Speed measurements in desktop engines / served on the LAN for phones |
+| `pnpm check:bfcache` / `pnpm check:vite` | Manual browser checks (not in CI); see `docs/design/benchmark.html` |
 
 **Before finishing any change, run:**
 
@@ -31,6 +34,10 @@ CI (`.github/workflows/ci.yml`) runs the same steps on every push and PR.
 ```
 src/                 library source; tests next to code as *.test.ts
 src/index.ts         public entry; everything exported here is public API
+test/browser/        Vitest browser-mode tests (real OPFS, Workers, Web Locks)
+test/bfcache/        bfcache check script (headed Chromium)
+test/vite-dev/       check that the worker loads in a Vite app
+bench/               speed measurement page and runner
 docs/decisions.md    design decision records (Markdown)
 docs/design/         design documents (HTML, open in a browser; start at index.html)
 docs/RELEASING.md    release process (human-only)
@@ -54,13 +61,16 @@ vitest.config.ts     test environment
   ```ts
   new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opfslogd' })
   ```
+- Keep that expression literal. Do not put the URL in a variable or merge it with `workerUrl` (`options.workerUrl ?? new URL(...)`): Vite then inlines the worker as a data URL in production builds. See `docs/decisions.md` #059.
 - **Do not inline the worker.** No blob URL build (needs `worker-src blob:` in CSP) and never a data URL (opaque origin, no OPFS access).
 - See `docs/decisions.md` #009 for details.
 
 ## Testing
 
-- Vitest with `jsdom`. jsdom has **no OPFS, no Workers, and no Web Locks**.
-- Do not mock those APIs to make tests pass. Test that code with Vitest browser mode (Playwright). If browser mode is not set up yet, say so instead of faking it.
+- Two Vitest projects (`vitest.config.ts`): `unit` runs `src/**/*.test.ts` in jsdom; `browser` runs `test/browser/**/*.test.ts` in Chromium, Firefox, and WebKit through Playwright.
+- jsdom has **no OPFS, no Workers, and no Web Locks**. Do not mock those APIs to make tests pass; test that code in the `browser` project.
+- WebKit blocks OPFS in Playwright's default throwaway context, so the WebKit instance uses a persistent context and runs one file at a time. Keep that.
+- Vitest `bench` does not run in browser mode; speed measurements live in `bench/`.
 - Add or update tests with every behavior change.
 
 ## Git

@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bfcache check: page A</title>
+<script type="module">
+  // ?case=empty | worker | sah | lock
+  const kase = new URLSearchParams(location.search).get('case')
+
+  window.__restored = false
+  addEventListener('pageshow', (event) => {
+    if (event.persisted) window.__restored = true
+  })
+
+  let worker
+  window.__call = (msg) =>
+    new Promise((resolve) => {
+      worker.onmessage = (event) => resolve(event.data)
+      worker.postMessage(msg)
+    })
+
+  async function setup() {
+    if (kase === 'worker' || kase === 'sah') {
+      worker = new Worker('./worker.js', { type: 'module' })
+      const res = await window.__call({ op: kase === 'sah' ? 'open' : 'ping' })
+      if (!res.ok) throw new Error(res.error)
+    } else if (kase === 'lock') {
+      await new Promise((resolve) => {
+        navigator.locks.request('opfslogd-bfcache-check', () => {
+          resolve()
+          return new Promise(() => {}) // hold forever
+        })
+      })
+    }
+  }
+
+  window.__ready = setup().then(
+    () => 'ok',
+    (e) => `setup failed: ${e}`,
+  )
+</script>

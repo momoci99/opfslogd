@@ -6,3 +6,6 @@ coverage
 
 # Personal notes (not tracked)
 notes/
+
+# Vitest browser mode failure screenshots
+.vitest/

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opfslogd 벤치마크와 브라우저 확인</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<p class="meta"><a href="index.html">← 설계 현황</a></p>
+
+<h1>벤치마크와 브라우저 확인</h1>
+<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 · 코드: <code>test/browser/</code>, <code>vitest.config.ts</code></p>
+
+<p class="lead">설계가 기대는 브라우저 동작이 실제로 그런지 확인하고, 초안 숫자를 정할 속도를 잽니다. 각 문서의 "검증할 것" 항목의 결과는 이 문서에 모읍니다.</p>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#scope">범위</a></li>
+    <li><a href="#run">실행 방법</a></li>
+    <li><a href="#api">브라우저 API 확인 결과</a></li>
+    <li><a href="#speed">속도 측정</a></li>
+    <li><a href="#impl">구현 단계로 넘긴 것</a></li>
+    <li><a href="#manual">실기기에서 직접 확인할 것</a></li>
+  </ol>
+</nav>
+
+<h2 id="scope">1. 범위</h2>
+<p>6단계는 라이브러리 코드 없이 데스크톱 브라우저 엔진 3종(Chromium, Firefox, WebKit)에서 확인할 수 있는 것만 다룹니다(#058).</p>
+<ul>
+  <li><strong>브라우저 API 확인:</strong> 설계가 가정한 동작이 되는지. 안 되면 설계가 바뀌므로 먼저 합니다.</li>
+  <li><strong>속도 측정:</strong> 라이브러리 없이 잴 수 있는 것.</li>
+</ul>
+<p>Playwright의 WebKit은 Safari와 같지 않고, Playwright는 휴대폰에서 돌지 않습니다. Chromium의 CPU throttling도 저사양 휴대폰을 흉내 낼 뿐입니다. 그래서 모바일 수치는 <a href="#manual">실기기 확인</a>으로 넘깁니다.</p>
+
+<h2 id="run">2. 실행 방법</h2>
+<pre><code>pnpm exec playwright install chromium firefox webkit   # 처음 한 번
+pnpm test                                              # unit + browser
+pnpm vitest run --project browser --reporter=verbose   # 브라우저 결과만, 기록 줄 포함
+pnpm check:bfcache                                     # bfcache 확인 (Chromium 창이 열림)
+pnpm check:vite                                        # Vite 앱에서 Worker 경로 확인</code></pre>
+<ul>
+  <li><code>vitest.config.ts</code>는 프로젝트 둘로 나뉩니다. <code>unit</code>은 jsdom에서 <code>src/**/*.test.ts</code>를, <code>browser</code>는 실제 브라우저에서 <code>test/browser/**/*.test.ts</code>를 돌립니다.</li>
+  <li>OPFS 작업은 테스트용 Worker(<code>test/browser/opfs.worker.ts</code>)가 합니다. 라이브러리처럼 Worker 안에서 sync access handle을 씁니다.</li>
+  <li>WebKit은 Playwright 기본 컨텍스트(일회용)에서 OPFS를 막습니다. <code>navigator.storage.getDirectory()</code>가 <code>UnknownError</code>를 던집니다. 그래서 WebKit만 영구 컨텍스트(<code>node_modules/.cache/vitest-webkit-profile</code>)로 돌리고, 영구 컨텍스트는 페이지를 하나만 열 수 있어서 파일을 하나씩 실행합니다.</li>
+  <li>CI도 같은 테스트를 돌립니다. 테스트 전에 브라우저 3종을 설치합니다.</li>
+</ul>
+
+<h2 id="api">3. 브라우저 API 확인 결과</h2>
+<p>측정 환경: Playwright 1.64.1 · Chromium 156 · Firefox 157 · WebKit 27.2 · macOS · 2026-11-01</p>
+<div class="table-wrap">
+<table>
+  <tr><th>항목</th><th>Chromium</th><th>Firefox</th><th>WebKit</th><th>설계에 미치는 영향</th></tr>
+  <tr>
+    <td>OPFS 안에서 <code>FileSystemFileHandle.move()</code>로 닫힌 세그먼트를 다른 디렉터리로 옮기기 (<a href="architecture.html#verify">architecture</a>)</td>
+    <td><span class="tag ok">됨</span></td><td><span class="tag ok">됨</span></td><td><span class="tag ok">됨</span></td>
+    <td>세그먼트 상태 전이(#012)를 그대로 둡니다. 테스트가 assert합니다.</td>
+  </tr>
+  <tr>
+    <td>다른 Worker가 sync access handle을 연 파일을 <code>getFile()</code>로 읽기 (<a href="architecture.html#verify">architecture</a>, <a href="api.html#verify">api</a>)</td>
+    <td><span class="tag ok">읽힘</span></td><td><span class="tag ok">읽힘</span></td><td><span class="tag ok">읽힘</span></td>
+    <td>다른 탭의 활성 세그먼트를 나중에 export에 넣을 수 있습니다(#054). 쓰는 도중에 읽으면 마지막 줄이 덜 쓰였을 수 있으므로, 읽는 쪽은 줄바꿈으로 끝나지 않는 마지막 줄을 건너뜁니다. 테스트는 결과만 기록합니다.</td>
+  </tr>
+  <tr>
+    <td>Worker가 sync access handle을 연 페이지가 bfcache에 들어가는지, 돌아온 뒤 쓰기가 이어지는지 (<a href="protocol.html#verify">protocol</a>)</td>
+    <td><span class="tag ok">들어감, 쓰기 이어짐</span></td><td colspan="2"><span class="tag warn">자동 확인 불가</span> → <a href="#manual">실기기</a></td>
+    <td>Chromium에서는 우리 라이브러리가 사용자 앱의 bfcache를 끄지 않습니다. 돌아온 Worker는 같은 handle로 이어서 씁니다(#020).</td>
+  </tr>
+  <tr>
+    <td>Web Lock을 쥔 페이지가 bfcache에 들어가는지 (참고)</td>
+    <td><span class="tag ok">들어감</span></td><td colspan="2"><span class="tag warn">자동 확인 불가</span> → <a href="#manual">실기기</a></td>
+    <td>Lock은 실행할 때만 쥐므로(#022) 평소에는 해당이 없습니다. 참고로만 남깁니다.</td>
+  </tr>
+  <tr>
+    <td>npm으로 설치한 패키지가 <code>new Worker(new URL('./worker.js', import.meta.url))</code>로 Worker를 띄울 때 Vite 앱에서 되는지 (<a href="architecture.html#verify">architecture</a>)</td>
+    <td colspan="3"><span class="tag ok">됨</span> (Vite 8.3.5, Chromium)</td>
+    <td>dev(설정 없음), dev(<code>optimizeDeps.exclude</code>), build + preview 모두 Worker가 뜨고 OPFS가 됩니다. 사용자에게 <code>optimizeDeps.exclude</code>를 요구할 필요가 없습니다(#009). 단, 아래 조건이 있습니다.</td>
+  </tr>
+</table>
+</div>
+
+<h3>bfcache 확인 방법</h3>
+<p>Vitest browser mode는 테스트를 iframe 안에서 돌려서 페이지 이동을 볼 수 없습니다. 그래서 <code>test/bfcache/run.mjs</code>가 Playwright로 직접 확인합니다(<code>pnpm check:bfcache</code>, Chromium 창이 열립니다).</p>
+<ul>
+  <li>페이지 A를 열고 경우별로 준비한 뒤, 페이지 B로 갔다가 뒤로 갑니다. A의 <code>pageshow</code> 이벤트에서 <code>persisted</code>가 true이면 bfcache에서 복원된 것입니다.</li>
+  <li>경우: 빈 페이지(대조군), Worker만 있는 페이지, Worker가 sync handle을 연 페이지, Web Lock을 쥔 페이지</li>
+  <li>대조군이 복원되지 않으면 그 브라우저 설정에서는 bfcache가 꺼진 것이므로 나머지 결과는 의미가 없습니다.</li>
+  <li>Playwright에서는 headed Chromium만 대조군이 복원됩니다. headless Chromium은 이유가 <code>masked</code>로만 나오고 복원되지 않습니다. Firefox는 bfcache pref를 켜면 뒤로 간 페이지가 다시 보이지 않습니다. WebKit은 headless와 headed 모두 대조군도 복원되지 않습니다. 그래서 Firefox와 Safari는 실기기에서 확인합니다.</li>
+  <li>Playwright는 Chromium에 <code>--disable-back-forward-cache</code>를 기본으로 넣으므로 스크립트가 이를 뺍니다. 복원된 페이지는 <code>load</code> 이벤트가 다시 발생하지 않으므로 <code>goBack()</code>은 commit까지만 기다립니다.</li>
+  <li>CI에서는 돌리지 않습니다. 창이 필요하기 때문입니다.</li>
+</ul>
+
+<h3>Vite 확인 방법과 조건</h3>
+<p><code>test/vite-dev/run.mjs</code>(<code>pnpm check:vite</code>)가 가짜 패키지(<code>test/vite-dev/fake-pkg</code>)를 임시 Vite 앱의 <code>node_modules</code>에 복사해 넣고, 세 경우를 Chromium headless에서 엽니다. Worker는 자기가 어디서 로드됐는지와 OPFS가 되는지를 보고합니다. Vite는 Vitest가 의존하는 것을 그대로 씁니다.</p>
+<ul>
+  <li><strong>조건:</strong> Vite는 <code>new Worker(new URL('./worker.js', import.meta.url), ...)</code>가 한 식으로 쓰였을 때만 Worker로 알아봅니다. URL을 변수에 담아 <code>new Worker(url)</code>로 넘기면 dev에서는 되지만, build에서는 Worker 파일이 작은 에셋으로 취급되어 <code>data:</code> URL로 인라인되고 OPFS가 <code>SecurityError: Storage directory access is denied</code>로 막힙니다. 개발 중에는 보이지 않고 배포 후에만 드러납니다.</li>
+  <li>Vite 외 번들러(webpack, Rollup, esbuild 단독 등)는 아직 확인하지 않았습니다.</li>
+</ul>
+
+<h3>부수적으로 알게 된 것</h3>
+<ul>
+  <li>WebKit의 일회용 컨텍스트에서 OPFS가 막힌다는 것은 실제 Safari 사설 브라우징에서도 <code>getDirectory()</code>가 실패할 가능성이 크다는 뜻입니다. 이 경우는 #041(저장소를 시작할 수 없으면 닫힌 logger처럼 동작)로 처리됩니다. 실제 Safari 확인은 <a href="#manual">실기기 목록</a>에 둡니다.</li>
+</ul>
+
+<h2 id="speed">4. 속도 측정</h2>
+<p>코드: <code>bench/</code>. 실행: <code>pnpm bench</code>(데스크톱 엔진에서 페이지를 열어 결과를 모음), <code>pnpm bench:serve</code>(LAN에 페이지를 열어 휴대폰으로 접속). Vitest의 <code>bench</code>는 browser mode에서 동작하지 않아(<code>bench</code>가 export되지 않음) 측정 코드를 직접 작성했습니다. 각 값은 약 50ms짜리 측정을 15번 해서 얻은 중앙값입니다.</p>
+<p>측정 환경: Playwright 1.64.1 · Chromium 156 · Firefox 157 · WebKit 27.2 · macOS · 2026-11-01. "Chromium 4x"는 CPU를 4배 느리게 한 Chromium으로, 저사양 휴대폰을 흉내 낸 값일 뿐입니다.</p>
+<p>레코드 크기: 작은 것 50바이트(<code>msg</code>만), 중간 184바이트(<code>ctx</code>에 키 5개), 큰 것 838바이트(<code>ctx</code>에 객체 10개 배열).</p>
+
+<h3>측정값 (중앙값)</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>측정</th><th>Chromium</th><th>Firefox</th><th>WebKit</th><th>Chromium 4x</th></tr>
+  <tr><th colspan="5">1. 레코드 하나 <code>JSON.stringify</code> (#014)</th></tr>
+  <tr><td>작은 레코드</td><td>0.07 µs</td><td>0.26 µs</td><td>0.07 µs</td><td>0.28 µs</td></tr>
+  <tr><td>중간 레코드</td><td>0.20 µs</td><td>0.55 µs</td><td>0.19 µs</td><td>0.86 µs</td></tr>
+  <tr><td>큰 레코드</td><td>1.6 µs</td><td>2.2 µs</td><td>0.79 µs</td><td>6.5 µs</td></tr>
+  <tr><th colspan="5">2. 버퍼: 문자열 보관 + flush 때 인코딩 vs 호출마다 <code>encodeInto</code> (#014, #015). 중간 레코드 2,000줄(361KB)</th></tr>
+  <tr><td>문자열: 2,000번 push</td><td>5 µs</td><td>6 µs</td><td>7 µs</td><td>22 µs</td></tr>
+  <tr><td>문자열: flush(<code>join</code> + <code>encode</code>)</td><td>348 µs</td><td>92 µs</td><td>51 µs</td><td>1.43 ms</td></tr>
+  <tr><td><strong>문자열 합계</strong></td><td><strong>353 µs</strong></td><td><strong>98 µs</strong></td><td><strong>58 µs</strong></td><td><strong>1.45 ms</strong></td></tr>
+  <tr><td><code>encodeInto</code>: 2,000번 호출</td><td>671 µs</td><td>400 µs</td><td>611 µs</td><td>2.52 ms</td></tr>
+  <tr><td><code>encodeInto</code>: flush(복사)</td><td>20 µs</td><td>26 µs</td><td>7 µs</td><td>92 µs</td></tr>
+  <tr><td><strong><code>encodeInto</code> 합계</strong></td><td><strong>691 µs</strong></td><td><strong>426 µs</strong></td><td><strong>618 µs</strong></td><td><strong>2.61 ms</strong></td></tr>
+  <tr><th colspan="5">3. 줄 20,000개 <code>JSON.parse</code> (#042)</th></tr>
+  <tr><td>줄마다 <code>JSON.parse</code></td><td>10.1 ms</td><td>15.3 ms</td><td>4.6 ms</td><td>41.5 ms</td></tr>
+  <tr><td><code>"[" + join(",") + "]"</code>를 한 번에</td><td>8.7 ms</td><td>13.2 ms</td><td>4.7 ms</td><td>36.6 ms</td></tr>
+  <tr><th colspan="5">4. 8MB 세그먼트(45,344줄)를 <code>ts</code> 앞부분 문자열로 스캔 (#016, #055)</th></tr>
+  <tr><td><code>Blob.text()</code></td><td>3.2 ms</td><td>30.3 ms</td><td>5.4 ms</td><td>14.3 ms</td></tr>
+  <tr><td>디코딩된 문자열에서 줄 스캔</td><td>3.0 ms</td><td>4.7 ms</td><td>1.3 ms</td><td>12.3 ms</td></tr>
+  <tr><td><strong>합계</strong></td><td><strong>6.2 ms</strong></td><td><strong>34.5 ms</strong></td><td><strong>6.6 ms</strong></td><td><strong>26.5 ms</strong></td></tr>
+</table>
+</div>
+<p>2,000줄은 지속 목표(초당 1만 건)에서 200ms 동안 쌓이는 양입니다. 20,000줄을 넣은 측정도 비율이 같아서 표에서 뺐습니다(<code>pnpm bench</code> 출력에 있음). 스캔은 메모리의 <code>Blob</code>으로 쟀고, OPFS에서 읽는 비용은 들어 있지 않습니다.</p>
+
+<h3>해석</h3>
+<ul>
+  <li><strong>#014 유지:</strong> <code>log()</code> 한 번의 직렬화는 중간 레코드 기준 1 µs 미만이고, Chromium 4x의 큰 레코드도 6.5 µs입니다. "평균 수 µs 이하" 목표 안에 듭니다.</li>
+  <li><strong>#015 유지:</strong> 문자열 보관이 모든 엔진에서 <code>encodeInto</code>보다 2~10배 적게 듭니다. 호출마다 <code>encodeInto</code>를 부를 이유가 없습니다.</li>
+  <li><strong>flush 한 번은 최대 약 1,400줄입니다.</strong> 크기 조건(256K자, #017) 때문에 폭주 때도 한 번에 2만 건이 쌓이지 않습니다. #042와 <a href="api.html#verify">api.html</a>의 "flush 한 번 약 2만 건"은 크기 조건이 생기기 전의 가정입니다. 256K자 flush 한 번의 <code>join</code> + <code>encode</code>는 Chromium 약 0.25ms, Chromium 4x 약 1ms입니다.</li>
+  <li><strong>subscriber 비용 (#042):</strong> flush 한 번(약 1,400줄) 파싱은 Chromium 약 0.7ms, Chromium 4x 약 2.9ms입니다. 다만 100k/s 폭주가 1초 이어지면 합계가 Chromium 약 50ms, Chromium 4x 약 200ms로, 메인 스레드의 5~20%입니다. 디버깅용(#043)이라는 전제로는 받아들일 만합니다. 한 번에 파싱하는 방식은 줄마다 파싱하는 것보다 10~15%만 빠르므로, 줄마다 파싱해도 됩니다.</li>
+  <li><strong>flush 주기와 1% 기준 (#017):</strong> 초당 1만 건에서 flush의 줄 수에 비례하는 비용은 Chromium 4x 기준 메인 스레드의 약 0.7%이고, 이 값은 주기와 상관이 없습니다. 주기를 정하는 것은 flush 한 번마다 고정으로 드는 비용(<code>postMessage</code>, 타이머, ack 처리)인데, 이것은 구현이 있어야 잴 수 있습니다(<a href="#impl">구현 단계</a>). 참고로 같은 조건에서 <code>log()</code> 쪽 직렬화가 약 0.9%를 더 씁니다.</li>
+  <li><strong>#016 유지:</strong> 프레임 없이 8MB 세그먼트를 스캔해도 Firefox 약 35ms, 나머지 7ms 안팎입니다. 보존 상한 50MB(#052) 전체를 export해도 Worker에서 1초 미만으로 예상됩니다. Firefox는 <code>Blob.text()</code>가 다른 엔진보다 5~10배 느립니다.</li>
+</ul>
+
+<p><strong>하지 않은 측정:</strong> <code>JSON.stringify</code> vs msgpackr (#016). 결과와 상관없이 런타임 의존성을 들이지 않고, 직렬화가 이미 목표 안이므로 뺐습니다(#060).</p>
+
+<h2 id="impl">5. 구현 단계로 넘긴 것</h2>
+<p>실제 쓰기 경로가 있어야 의미가 있는 측정입니다(#058).</p>
+<ul>
+  <li>flush 주기와 크기: 200ms, 256K자, error 뒤 50ms (#017). flush 한 번마다 드는 고정 비용(<code>postMessage</code>, 타이머, ack)을 재서 정합니다.</li>
+  <li>폭주와 메인 스레드 긴 작업이 겹칠 때 버려지는 양, 80% 문턱과 4M자 상한 (#018, #019)</li>
+  <li><code>pagehide</code> 때 보낸 flush가 파일에 쓰이는 비율 (#020)</li>
+  <li>flush마다 새 버퍼를 할당할 때의 GC 비용 (#015)</li>
+  <li>Worker 하나당 메모리</li>
+</ul>
+
+<h2 id="manual">6. 실기기에서 직접 확인할 것</h2>
+<p>자동화가 어렵거나 실제 기기, 긴 시간이 필요한 항목입니다(#058).</p>
+<ul>
+  <li>모바일 Safari의 OPFS quota와 eviction 동작</li>
+  <li>Safari ITP 7일 상한이 OPFS 데이터를 지우는지 (#051)</li>
+  <li>Safari 사설 브라우징에서 <code>getDirectory()</code>가 실패하는지 (#041)</li>
+  <li>Firefox와 Safari(데스크톱, iOS)에서 Worker가 sync handle을 연 페이지가 bfcache에 들어가는지, 돌아온 뒤 쓰기가 이어지는지 (#020). <code>test/bfcache/</code>의 페이지를 열고 직접 뒤로 가기를 하면 됩니다.</li>
+  <li>Web Lock을 가진 탭이 freeze되는지, 브라우저별로 언제 되는지 (#022)</li>
+  <li>느린 모바일 회선에서 8MB 세그먼트 업로드 시간 (#045)</li>
+  <li>휴대폰에서 <code>pnpm bench:serve</code> 페이지 결과 (특히 저사양 Android, iOS Safari)</li>
+  <li>장애 복구 직후 여러 클라이언트가 밀린 세그먼트를 한꺼번에 올릴 때의 부하 (#047)</li>
+</ul>
+
+</main>
+</body>
+</html>

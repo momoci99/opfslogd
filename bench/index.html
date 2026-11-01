@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opfslogd benchmarks</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+  table { border-collapse: collapse; }
+  td, th { border-bottom: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+  td:nth-child(3), td:nth-child(4) { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<h1>opfslogd benchmarks</h1>
+<p id="status"></p>
+<p>Keep this tab in front while it runs.</p>
+<table>
+  <thead><tr><th>group</th><th>case</th><th>median</th><th>fastest</th><th>note</th></tr></thead>
+  <tbody id="out"></tbody>
+</table>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>

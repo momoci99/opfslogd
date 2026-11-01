@@ -23,7 +23,7 @@
   <tr><td>3. 저장 포맷</td><td><span class="tag ok">완료</span></td><td><a href="storage-format.html">storage-format.html</a></td><td>#010(→#016) ~ #013</td></tr>
   <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag ok">완료</span></td><td><a href="protocol.html">protocol.html</a></td><td>#014 ~ #023</td></tr>
   <tr><td>5. 공개 API</td><td><span class="tag ok">완료</span></td><td><a href="api.html">api.html</a></td><td>#024 ~ #057</td></tr>
-  <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td><span class="tag warn">다음</span></td><td>—</td><td>—</td></tr>
+  <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td><span class="tag ok">완료</span></td><td><a href="benchmark.html">benchmark.html</a></td><td>#058 ~ #060</td></tr>
 </table>
 </div>
 
@@ -46,11 +46,15 @@
   <li>압축은 보류합니다.</li>
 </ul>
 
-<h2 id="next">6단계(벤치마크 환경)에서 다룰 것</h2>
+<h2 id="next">6단계 결과와 다음</h2>
+<p>범위는 #058, 결과는 <a href="benchmark.html">benchmark.html</a>에 있습니다.</p>
 <ul>
-  <li>Vitest browser mode(Playwright) 구성. jsdom에는 OPFS, Worker, Web Locks가 없습니다(#005).</li>
-  <li>초안 숫자를 정할 벤치마크: flush 주기와 크기(#017), 호출마다 <code>encodeInto</code> 여부(#014), 버퍼 상한과 80% 문턱(#019), 세그먼트 스캔(#016), subscribe 파싱(#042), 업로드 시간(#045)</li>
-  <li>검증할 것 목록: <a href="architecture.html#verify">architecture.html</a>, <a href="storage-format.html#verify">storage-format.html</a>, <a href="protocol.html#verify">protocol.html</a>, <a href="api.html#verify">api.html</a></li>
+  <li>Vitest browser mode(Chromium, Firefox, WebKit) 구성. WebKit은 영구 컨텍스트가 필요합니다.</li>
+  <li><code>move()</code>, 잠긴 파일 <code>getFile()</code>: 세 엔진 모두 됩니다.</li>
+  <li>bfcache: Chromium에서 sync handle을 쥔 채 들어가고 돌아온 뒤 쓰기도 이어집니다. Firefox와 Safari는 실기기 목록으로 넘겼습니다.</li>
+  <li>Vite 8: 설정 없이 dev와 build 모두 됩니다. Worker는 한 식으로만 만듭니다(#059).</li>
+  <li>속도: #014, #015, #016 유지. flush 한 번은 최대 약 1,400줄(#042 메모 추가). msgpackr 비교는 뺐습니다(#060).</li>
+  <li>남은 측정은 <a href="benchmark.html#impl">구현 단계</a>와 <a href="benchmark.html#manual">실기기 목록</a>으로 넘겼습니다.</li>
 </ul>
 
 <h2 id="later">나중으로 넘긴 것</h2>
