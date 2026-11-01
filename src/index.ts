@@ -1,9 +1,11 @@
 // Public API (docs/design/api.html). Everything exported here is public.
 
 import { Core, type InitOptions, type Subscriber } from './core'
+import type { ExportResult } from './export'
 import type { Level } from './record'
 
 export type { InitOptions, LogRecord, SendMeta, Subscriber, UploadOptions } from './core'
+export type { ExportResult } from './export'
 export { OpfslogdError, type OpfslogdErrorCode } from './errors'
 export type { Level } from './record'
 
@@ -63,4 +65,14 @@ export function close(): Promise<void> {
  */
 export function subscribe(fn: Subscriber): () => void {
   return core.subscribe(fn)
+}
+
+/**
+ * Stored logs as one JSON Lines Blob in time order: closed segments plus this tab's
+ * current one. `from` and `to` limit the time range (ms). Other tabs' current segments
+ * and files from newer versions are left out and counted in `skipped`. Before `init()`
+ * or after `close()`, resolves at once with an empty Blob. Never rejects. (#054 - #056, #063)
+ */
+export function exportLogs(options?: { from?: number; to?: number }): Promise<ExportResult> {
+  return core.exportLogs(options)
 }

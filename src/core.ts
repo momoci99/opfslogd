@@ -4,6 +4,7 @@ import { mergeContext, serializeContext, type Context } from './context'
 import { ErrorReporter, OpfslogdError, type OpfslogdErrorCode } from './errors'
 import { isValidNamespace, lockNames, newTabId } from './names'
 import type { FromWorker, ToWorker, WorkerCall } from './protocol'
+import type { ExportResult } from './export'
 import type { Prepared, UploadMeta } from './upload-worker'
 import { RecordQueue, type WriteFailReason } from './queue'
 import { serializeRecord, type Level } from './record'
@@ -510,6 +511,23 @@ export class Core {
       this.calls.set(id, resolve)
       this.post({ type: 'call', id, call })
     })
+  }
+
+  /**
+   * Closed segments plus this tab's active one, merged in time order (#054 - #056).
+   * Outside the running state: an empty result at once (#063). Never rejects.
+   */
+  async exportLogs(options: { from?: number; to?: number } = {}): Promise<ExportResult> {
+    const empty = (): ExportResult => ({
+      file: new Blob([], { type: 'application/x-ndjson' }),
+      skipped: { activeOtherTabs: 0, unreadable: 0 },
+    })
+    if (this.state !== 'open' || !this.worker) return empty()
+    const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    // what is queued now goes into the file first (#038)
+    await this.flush()
+    const result = (await this.call({ op: 'export', from: num(options?.from), to: num(options?.to) })) as ExportResult | undefined
+    return result ?? empty()
   }
 
   /** Adds a subscriber; returns a function that removes it, safe to call twice (#043). */

@@ -3,6 +3,7 @@
 import { lockNames } from './names'
 import { openDirs, type Dirs } from './opfs'
 import type { FromWorker, ToWorker } from './protocol'
+import { exportLogs } from './export'
 import { runRetention } from './retention'
 import { listPending, markDone, prepare } from './upload-worker'
 import { SegmentWriter } from './writer'
@@ -20,6 +21,19 @@ let chain: Promise<void> = Promise.resolve()
 
 function schedule(task: () => Promise<void>): void {
   chain = chain.then(task).catch(() => {})
+}
+
+/** Runs a task in message order and returns its result. */
+function inOrder<T>(task: () => T): Promise<T> {
+  return new Promise((resolve, reject) => {
+    schedule(async () => {
+      try {
+        resolve(task())
+      } catch (e) {
+        reject(e)
+      }
+    })
+  })
 }
 
 function post(msg: FromWorker): void {
@@ -95,10 +109,26 @@ async function answer(id: number, call: Extract<ToWorker, { type: 'call' }>['cal
   try {
     if (!setup) throw new Error('not started')
     const { dirs } = setup
-    value =
-      call.op === 'list-pending' ? await listPending(dirs) : call.op === 'prepare' ? await prepare(dirs, call.name) : await markDone(dirs, call.name)
+    switch (call.op) {
+      case 'list-pending':
+        value = await listPending(dirs)
+        break
+      case 'prepare':
+        value = await prepare(dirs, call.name)
+        break
+      case 'mark-done':
+        value = await markDone(dirs, call.name)
+        break
+      case 'export': {
+        // Copy this tab's active segment in message order, after the writes sent before
+        // the export; merge outside that order so writes keep going (#054).
+        const own = await inOrder(() => writer?.snapshot())
+        value = await exportLogs(dirs, own, call.from, call.to)
+        break
+      }
+    }
   } catch {
-    value = call.op === 'list-pending' ? [] : call.op === 'prepare' ? { kind: 'skip' } : false
+    value = undefined
   }
   post({ type: 'reply', id, value })
 }

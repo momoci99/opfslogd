@@ -2,7 +2,7 @@
 // Its own file, so Vitest gives it a fresh module.
 
 import { afterAll, expect, it } from 'vitest'
-import { close, flush, init, logger } from '../../src/index'
+import { close, exportLogs, flush, init, logger } from '../../src/index'
 
 const ns = `t-${Date.now().toString(36)}-early`
 
@@ -13,6 +13,8 @@ afterAll(async () => {
 })
 
 it('keeps records logged before init() and writes them after (#028, #038)', async () => {
+  // exportLogs() before init() resolves empty at once (#063)
+  expect((await exportLogs()).file.size).toBe(0)
   logger.info('early 1')
   logger.error('early 2')
   const done = flush()

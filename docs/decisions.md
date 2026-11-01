@@ -1218,3 +1218,15 @@ if (isDev) logger.debug('scroll', { y })
 **Why:**
 - Functions cannot cross to the worker, so `send()` and therefore the lock live on the main thread. Reading, converting, and hashing a 2MB segment stay off the main thread.
 - One report per file keeps a newer tab's files from producing an error every minute in an error tracker.
+
+## 080. Export details settled in implementation (2026-11-01)
+
+**Decision:**
+- `exportLogs()` first flushes (#038), then asks the worker. The worker copies its own active segment through its own handle in message order, so the copy holds every record flushed before the call (#054). The merge then runs beside writes, like retention (#078).
+- Every `active/` file other than this tab's is left out and counted in `skipped.activeOtherTabs`, including orphans that retention has not recovered yet. They are exported once recovered.
+- The merged output is folded into the `Blob` about every 1M characters, so the export does not sit in the worker's JS heap as one string. Input files are read whole (at most about 2MB each, #066), and only files whose time ranges overlap are open together (#056).
+- A `from` or `to` that is not a finite number is ignored.
+
+**Why:**
+- Copying the active segment in order needs no extra state and cannot see a half-written batch. Holding writes back for the whole merge (up to 50MB, #052) would delay acks and trip the overload limits (#019).
+- Treating unrecovered orphans as "not exported yet" keeps one rule for `active/`: only the owner reads its active file.

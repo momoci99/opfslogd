@@ -87,6 +87,15 @@ export class SegmentWriter {
     await this.rotate()
   }
 
+  /** A copy of the active segment, read through this worker's own handle (#054). */
+  snapshot(): { name: string; bytes: Uint8Array } | undefined {
+    const seg = this.seg
+    if (!seg) return undefined
+    const bytes = new Uint8Array(seg.size)
+    seg.handle.read(bytes, { at: 0 })
+    return { name: seg.name, bytes }
+  }
+
   /** Moves the active segment out of `active/` (#030). */
   async close(): Promise<void> {
     await this.rotate()
