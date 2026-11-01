@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opfslogd 메인 스레드 ↔ Worker 프로토콜</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<p class="meta"><a href="index.html">← 설계 현황</a></p>
+
+<h1>메인 스레드 ↔ Worker 프로토콜</h1>
+<p class="meta">상태: 4단계 진행 중 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #014 ~ #018 · 상위 문서: <a href="architecture.html">architecture.html</a>, <a href="storage-format.html">storage-format.html</a></p>
+
+<p class="lead"><code>log()</code>는 그 자리에서 레코드를 JSON 문자열로 만들어 메인 스레드의 문자열 큐에 넣습니다. 세 가지 조건 중 하나가 맞으면 큐를 바이트 하나로 묶어 Worker로 transfer하고, Worker는 받은 바이트를 세그먼트 파일에 그대로 덧붙입니다.</p>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#path">쓰기 경로</a></li>
+    <li><a href="#serialize">직렬화 시점</a></li>
+    <li><a href="#buffer">메인 스레드 버퍼</a></li>
+    <li><a href="#flush">flush 시점</a></li>
+    <li><a href="#ack">Worker 응답과 버퍼 상한</a></li>
+    <li><a href="#open">남은 항목</a></li>
+    <li><a href="#verify">검증할 것</a></li>
+  </ol>
+</nav>
+
+<h2 id="path">1. 쓰기 경로</h2>
+<figure>
+<svg viewBox="0 0 760 200" role="img" aria-label="log()가 레코드를 직렬화해 문자열 큐에 넣고, flush 조건이 맞으면 바이트로 인코딩해 Worker에 transfer합니다. Worker는 받은 바이트를 세그먼트 파일에 덧붙입니다.">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+  <rect x="20" y="20" width="460" height="160" rx="10" class="box"/>
+  <text x="36" y="44" class="label">메인 스레드</text>
+
+  <rect x="36" y="60" width="130" height="60" rx="6" class="box main"/>
+  <text x="48" y="84" font-size="13">log()</text>
+  <text x="48" y="104" class="small">JSON.stringify</text>
+
+  <rect x="186" y="60" width="130" height="60" rx="6" class="box main"/>
+  <text x="198" y="84" font-size="13">문자열 큐</text>
+  <text x="198" y="104" class="small">+ 길이 카운터</text>
+
+  <rect x="336" y="60" width="130" height="60" rx="6" class="box main"/>
+  <text x="348" y="84" font-size="13">flush</text>
+  <text x="348" y="104" class="small">join + encodeInto</text>
+
+  <text x="36" y="150" class="small">flush 조건: 200ms · 256K자 · error</text>
+
+  <path d="M166,90 L184,90" class="line" marker-end="url(#arr)"/>
+  <path d="M316,90 L334,90" class="line" marker-end="url(#arr)"/>
+  <path d="M466,90 L548,90" class="line" marker-end="url(#arr)"/>
+  <text x="486" y="80" class="small">transfer</text>
+
+  <rect x="550" y="20" width="190" height="160" rx="10" class="box"/>
+  <text x="566" y="44" class="label">Worker</text>
+  <rect x="566" y="60" width="158" height="60" rx="6" class="box ok"/>
+  <text x="578" y="84" font-size="13">handle.write()</text>
+  <text x="578" y="104" class="small">받은 바이트 그대로</text>
+</svg>
+<figcaption>직렬화는 메인 스레드의 <code>log()</code>에서 한 번만 일어납니다. Worker는 다시 인코딩하지 않습니다.</figcaption>
+</figure>
+
+<h2 id="serialize">2. 직렬화 시점: <code>log()</code>를 호출할 때 (#014)</h2>
+<p>사용자 객체를 flush까지 들고 있지 않고, <code>log()</code>를 호출한 순간 <code>JSON.stringify</code>합니다.</p>
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>flush 때 직렬화 (탈락)</th><th><code>log()</code> 때 직렬화 (채택)</th></tr>
+  <tr><td>기록되는 값</td><td>flush 시점의 값. <code>log('x', obj); obj.a = 2</code>이면 2가 기록됨</td><td>호출한 순간의 값</td></tr>
+  <tr><td>버퍼 상한</td><td>JS에 <code>sizeof</code>가 없어 셀 수 없음</td><td>문자열 길이로 셈</td></tr>
+  <tr><td>flush 순간 부하</td><td>폭주 때 약 20,000건을 한 번에 직렬화. 수십 ms 멈춤</td><td>비용이 호출마다 나뉨</td></tr>
+  <tr><td><code>log()</code> 비용</td><td>push 한 번</td><td><code>JSON.stringify</code> 한 번 (작은 객체 약 1µs, 측정 필요)</td></tr>
+  <tr><td>과부하 때 버리기</td><td>쌓인 것 중 debug를 골라 뺌</td><td>이미 직렬화한 것은 못 뺌. 새로 들어오는 낮은 레벨을 거절</td></tr>
+</table>
+</div>
+
+<h2 id="buffer">3. 메인 스레드 버퍼: 문자열 큐 (#015)</h2>
+<pre><code>log() 때:  strings.push(json); size += json.length
+
+flush 때:  payload = strings.join('\n') + '\n'
+           새 Uint8Array에 encodeInto(payload)
+           Worker에 transfer
+           strings = [], size = 0</code></pre>
+<ul>
+  <li><strong>링버퍼를 쓰지 않습니다.</strong> transfer한 <code>ArrayBuffer</code>는 보낸 쪽에서 detach되어 다시 쓸 수 없습니다. 메모리를 공유하는 진짜 링버퍼는 <code>SharedArrayBuffer</code>가 필요하고, 이건 사이트에 COOP/COEP 헤더를 요구합니다. 라이브러리가 강요할 수 없습니다.</li>
+  <li>예전 SharedWorker 설계에서는 GC를 줄이려고 링버퍼를 썼습니다. 지금 구조에서는 할당이 flush마다 버퍼 하나뿐이라 그럴 필요가 없습니다.</li>
+  <li>크기는 문자열 길이(UTF-16 단위)로 셉니다. 메모리 상한이 목적이므로 디스크의 UTF-8 바이트 수와 달라도 됩니다.</li>
+  <li>버퍼 풀(Worker가 쓴 버퍼를 돌려줘서 재사용)은 넣지 않습니다. 벤치마크에서 GC가 문제로 나오면 검토합니다.</li>
+</ul>
+
+<h2 id="flush">4. flush 시점 (#017)</h2>
+<p>아래 조건 중 하나라도 맞으면 flush합니다. 숫자는 벤치마크에서 조정할 초안입니다.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>트리거</th><th>조건 (초안)</th><th>이유</th></tr>
+  <tr><td><strong>주기</strong></td><td>버퍼가 비어 있다가 첫 레코드가 들어오면 200ms 타이머를 건다</td><td>평소 크래시 때 잃는 양의 상한. 버퍼가 비어 있으면 타이머가 없어서, 로그가 없는 탭이 계속 깨어나지 않음(모바일 배터리)</td></tr>
+  <tr><td><strong>크기</strong></td><td>버퍼가 256K자를 넘으면 바로</td><td>폭주 때 상한에 닿기 전에 비움. flush 한 번의 <code>join</code>과 인코딩 비용, Worker로 가는 메시지 크기를 작게 유지</td></tr>
+  <tr><td><strong>error</strong></td><td>error 레벨이 들어오면 마이크로태스크로 flush. 직전 flush 후 50ms가 지나지 않았으면 그 50ms 시점으로 미룸</td><td>렌더러 크래시나 강제 종료 직전의 error를 덜 잃음. 같은 틱의 error는 한 번으로 묶이고, 여러 틱에 걸친 error 폭주에도 flush는 초당 최대 20번</td></tr>
+</table>
+</div>
+
+<h3>크기 트리거가 필요한 이유</h3>
+<p>주기만 있으면 1단계의 폭주 목표(1초에 100,000건)에서 200ms마다 약 20,000건, 레코드당 약 200자로 잡으면 약 4M자가 쌓입니다. 버퍼 상한(초안 4MB)에 한 주기 만에 닿습니다. 그러면 Worker는 놀고 있는데 다음 주기를 기다리느라 로그를 버리게 됩니다. 그 4M자를 한 번에 <code>join</code>하고 인코딩하는 비용도 메인 스레드에 몰립니다.</p>
+
+<h3>error 트리거의 효과 범위</h3>
+<p>탭을 닫거나 다른 페이지로 이동하는 경우는 <code>pagehide</code> 처리가 맡습니다. JS 에러로 탭이 죽지는 않습니다. 그래서 error 즉시 flush가 실제로 도움이 되는 건 렌더러 크래시(OOM 등)나 강제 종료 직전입니다. 효과 범위는 좁지만 비용이 작아서 넣습니다.</p>
+
+<h3>여기서 다루지 않는 트리거</h3>
+<ul>
+  <li>페이지가 숨겨지거나 닫힐 때(<code>visibilitychange</code>, <code>pagehide</code>): 아래 남은 항목에서 다룹니다. 백그라운드 탭은 타이머가 1초에 한 번(Chrome은 오래 숨겨지면 1분에 한 번)으로 늦춰지므로 주기 트리거만으로는 부족합니다.</li>
+  <li>사용자가 직접 부르는 <code>flush()</code>: 5단계 공개 API에서 다룹니다.</li>
+</ul>
+
+<div class="callout"><strong>크기 트리거로 드러난 문제 (#018에서 해결):</strong> 크기 트리거가 있으면 메인 스레드 버퍼는 256K자 이상 쌓이지 않으므로, 버퍼에 건 4MB 상한은 발동하지 않습니다. 하지만 Worker가 OPFS 쓰기를 따라가지 못하면 보낸 메시지가 Worker의 메시지 큐에 쌓입니다. 메인 스레드는 그 양을 볼 수 없고, 큐에는 상한도 없습니다. 상한은 "메인 버퍼 + 보냈지만 아직 쓰지 않은 양"에 걸어야 합니다. 그래서 Worker가 쓰기 완료 응답(ack)을 보내도록 했습니다. 다음 절을 보세요.</div>
+
+<h2 id="ack">5. Worker 응답과 버퍼 상한 (#018)</h2>
+<p>Worker는 flush 하나를 파일에 쓴 뒤 그 flush의 <code>id</code>를 메인 스레드로 돌려보냅니다. 메인 스레드는 응답이 오지 않은 양(<code>inFlight</code>)을 세고, 상한은 "메인 버퍼 + <code>inFlight</code>"에 겁니다.</p>
+<pre><code>메인 스레드                                   Worker
+───────────                                   ──────
+flush #41 (12K자)
+  inFlight += 12K
+  worker.postMessage({ id: 41, buf }, [buf]) ──▶  onmessage
+                                                  handle.write(buf)
+                                     ◀────────── self.postMessage({ id: 41 })
+worker.onmessage
+  inFlight -= 12K   (보낼 때 41번 크기를 기억해 둠)</code></pre>
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>A. 응답 없음</th><th>B. flush마다 ack (채택)</th><th>C. Worker 쪽에서 버림</th></tr>
+  <tr><td>상한</td><td>메인 버퍼에만 걸림. 사실상 없음</td><td>메인 버퍼 + <code>inFlight</code>. 실제 메모리 상한이 됨</td><td>버릴 때는 이미 메모리를 쓴 뒤</td></tr>
+  <tr><td>레벨별 거절 (#014)</td><td>동작 안 함</td><td>메인에서 동작</td><td>Worker가 다시 파싱해야 함</td></tr>
+  <tr><td>비용</td><td>없음</td><td>작은 메시지 하나. 평소 초당 약 5번</td><td>없음</td></tr>
+</table>
+</div>
+<ul>
+  <li><strong>Worker가 밀리는 경우:</strong> 같은 Worker가 export와 업로드용 JSONL 변환, 크래시 복구도 합니다. 그동안 쓰기 메시지는 줄을 섭니다. 모바일에서는 OPFS 쓰기 자체가 느릴 수도 있습니다.</li>
+  <li><strong>Worker → 메인 채널은 이미 있습니다:</strong> 업로드 <code>Blob</code> 전달(#007), 오류 알림. ack는 메시지 종류 하나를 더하는 것입니다.</li>
+  <li><strong>덤:</strong> 응답이 끊기면 Worker가 죽었거나 멈췄다는 것을 메인이 알 수 있습니다.</li>
+  <li><strong>주의:</strong> 메인 스레드가 긴 작업을 하는 동안 ack는 처리되지 않으므로 <code>inFlight</code>가 실제보다 크게 보입니다. 결과는 일찍 거절하는 쪽(안전한 방향)으로 틀립니다. 거절 문턱을 정할 때 고려합니다.</li>
+</ul>
+
+<h2 id="open">6. 남은 항목</h2>
+<ul>
+  <li><strong>과부하 시 버리기:</strong> 어느 수준에서 어느 레벨을 거절할지(예: 50% debug, 75% info). 버린 건수를 레코드로 남기는 방식</li>
+  <li><strong><code>pagehide</code> / <code>visibilitychange</code>:</strong> 숨겨질 때와 닫힐 때의 flush, 세그먼트 봉인</li>
+  <li><strong>백그라운드에서 멈춘 탭의 Lock:</strong> 업로드 Lock을 쥔 채 멈추는 문제 (<a href="architecture.html#upload">업로드</a>의 위험 항목)</li>
+  <li><strong>같은 탭 안 <code>subscribe()</code>:</strong> 어느 지점에서 호출할지 (직렬화 전 또는 후, flush 전 또는 후)</li>
+</ul>
+
+<h2 id="verify">7. 검증할 것</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>항목</th><th>왜 필요한가</th></tr>
+  <tr><td>레코드 하나의 <code>JSON.stringify</code> 비용 (모바일 포함)</td><td><code>log()</code> 비용 목표(수 µs 이하) 확인 (#014)</td></tr>
+  <tr><td>문자열 보관 + flush 때 한 번 인코딩 vs 호출마다 <code>encodeInto</code></td><td>버퍼 형태 확정 (#014, #015)</td></tr>
+  <tr><td>flush 트리거 숫자 (200ms, 256K자, 50ms)</td><td>폭주 때 버리는 양과 메인 스레드 멈춤 시간 사이의 균형 (#017)</td></tr>
+  <tr><td>flush마다 새 버퍼를 할당할 때의 GC 비용</td><td>버퍼 풀이 필요한지 (#015)</td></tr>
+</table>
+</div>
+
+</main>
+</body>
+</html>

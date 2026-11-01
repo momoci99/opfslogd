@@ -101,7 +101,7 @@
   <text x="36" y="44" class="label">탭 1</text>
   <rect x="36" y="56" width="188" height="44" rx="6" class="box main"/>
   <text x="48" y="76" font-size="13">메인 스레드</text>
-  <text x="48" y="92" class="small">log() → 링버퍼에 모음</text>
+  <text x="48" y="92" class="small">log() → 문자열 큐에 모음</text>
   <rect x="36" y="114" width="188" height="44" rx="6" class="box ok"/>
   <text x="48" y="134" font-size="13">Dedicated Worker</text>
   <text x="48" y="150" class="small">sync handle로 기록</text>
@@ -112,7 +112,7 @@
   <text x="286" y="44" class="label">탭 2</text>
   <rect x="286" y="56" width="188" height="44" rx="6" class="box main"/>
   <text x="298" y="76" font-size="13">메인 스레드</text>
-  <text x="298" y="92" class="small">log() → 링버퍼에 모음</text>
+  <text x="298" y="92" class="small">log() → 문자열 큐에 모음</text>
   <rect x="286" y="114" width="188" height="44" rx="6" class="box ok"/>
   <text x="298" y="134" font-size="13">Dedicated Worker</text>
   <text x="298" y="150" class="small">sync handle로 기록</text>
@@ -155,7 +155,7 @@
 
 <h3>쓰기 경로</h3>
 <ol>
-  <li><code>log()</code>는 메인 스레드의 링버퍼에 레코드를 넣기만 합니다. 직렬화나 <code>postMessage</code>를 매번 하지 않습니다.</li>
+  <li><code>log()</code>는 레코드를 JSON 문자열로 만들어 메인 스레드의 문자열 큐에 넣습니다(#014, #015). <code>postMessage</code>는 매번 하지 않습니다.</li>
   <li>버퍼가 찼거나 flush 주기가 되면 레코드를 하나의 <code>ArrayBuffer</code>로 묶어 Worker에 <strong>transfer</strong>합니다(복사 없음).</li>
   <li>Worker는 sync handle로 자기 <code>active</code> 세그먼트에 덧붙입니다.</li>
   <li>세그먼트가 상한 크기(기본 8MB)에 도달하거나 탭이 닫히면 봉인하고 <code>pending/</code> 또는 <code>done/</code>으로 옮깁니다.</li>
@@ -274,7 +274,7 @@
 <h2 id="next">10. 다음 단계</h2>
 <ol>
   <li><strong>저장 포맷:</strong> 진행 중. <a href="storage-format.html">storage-format.html</a> 참고</li>
-  <li><strong>메인 스레드↔Worker 프로토콜:</strong> 링버퍼, 묶음 전송, flush 시점, <code>pagehide</code> 처리, 과부하 시 버리기</li>
+  <li><strong>메인 스레드↔Worker 프로토콜:</strong> 진행 중. <a href="protocol.html">protocol.html</a> 참고</li>
   <li><strong>공개 API:</strong> <code>init</code>, <code>log</code>, <code>subscribe</code>, <code>export</code>, <code>query</code>, <code>upload</code></li>
   <li><strong>벤치마크 환경:</strong> Vitest browser mode (Playwright)</li>
 </ol>

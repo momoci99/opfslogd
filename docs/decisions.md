@@ -105,6 +105,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 ## 010. Segment files are binary frames with JSON Lines payloads (2026-10-29)
 
+> **Superseded by #016 (2026-11-01).** Frame headers were removed. Segments are now a JSON header line followed by plain JSON Lines. The parts below about encoding once on the main thread with `JSON.stringify` and keeping the format internal still hold.
+
 **Decision:** A segment file is a small file header followed by frames. One flush is one frame. Each frame has a fixed-size binary header (magic, payload length, CRC32, record count, min/max timestamp, seq range, level bitmask) and a payload of UTF-8 JSON Lines. There is no per-record binary header. This format is internal: export and upload convert segments to plain JSON Lines.
 
 **Why:**
@@ -116,6 +118,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 **To verify:** native `JSON.stringify` vs JS binary encoders (e.g. msgpackr) on arbitrary objects; CRC32 throughput on mobile. Details: `docs/design/storage-format.html`.
 
 ## 011. Record schema: `ts`, `lv`, `msg`, `ctx`, `err`; per-tab values live in headers (2026-10-29)
+
+> **Amended by #016 (2026-11-01).** `seq` is now the file header's `seq0` plus the line index, since frame headers were removed.
 
 **Decision:** Each stored JSONL record has `ts`, `lv`, `msg`, and optional `ctx` (user data) and `err` (`name`, `message`, `stack`). Tab ID and global context are stored once in the file header. `seq` is derived from the frame header's starting seq plus the line index. Export and upload add these values back to every line.
 
@@ -138,6 +142,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 ## 013. Format versioning: reader/writer versions, extensible headers, fixed file names (2026-10-29)
 
+> **Amended by #016 (2026-11-01).** The frame header's `headerLength` and `flags` are gone with the frames. The JSON file header ignores unknown keys, which covers `headerLength`. Incompatible features raise `minReaderVersion`.
+
 **Decision:**
 - The segment file-name scheme (#012) never changes.
 - The file header has `formatVersion` (written by) and `minReaderVersion` (needed to read). A library can read a file when `minReaderVersion` is not above its own version.
@@ -150,3 +156,88 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 - Unread `pending` logs on user devices must survive upgrades.
 - Patterns borrowed: SQLite's separate read/write versions, Protobuf's ignore-unknown-fields (here `headerLength` and extra JSON keys), Kafka's per-batch attribute flags. Most changes become compatible and need no version bump.
 - IndexedDB-style `versionchange` notification is not needed: old tabs only skip what they cannot read.
+
+## 014. Serialize each record when `log()` is called, not at flush (2026-11-01)
+
+**Decision:** `log()` runs `JSON.stringify` on the record immediately and keeps only the result (string or bytes) in the main-thread buffer. User objects are never held until flush. Flush only joins, encodes, and transfers.
+
+**Why:**
+- Objects are passed by reference. If serialization waits until flush, changes the app makes in the meantime (`log('x', obj); obj.a = 2`) end up in the log. A log must record the value at call time.
+- JS has no `sizeof`. The per-tab buffer cap (draft 4MB) can only be enforced on serialized data.
+- Serializing a whole flush at once (about 20,000 records in a 100k/s burst) could block the main thread for tens of milliseconds. Per-call cost spreads this out.
+- Serialization errors (#011) are caught at the call site, per record.
+
+**Trade-offs:**
+- `log()` costs one `JSON.stringify` (about 1µs for small objects, to be benchmarked) instead of one array push.
+- Records already serialized cannot be picked out by level. Overload dropping becomes admission control: as the buffer fills, new low-level records are rejected first; `error` is always accepted.
+
+**To decide by benchmark:** keep strings and encode once at flush, or `encodeInto` bytes on every call.
+
+## 015. Main-thread buffer is a string queue, not a ring buffer (2026-11-01)
+
+**Decision:** The main thread keeps serialized records in a plain array of strings with a running length counter. At flush it joins them, encodes them into one new `ArrayBuffer`, and transfers it to the worker. A new buffer is allocated per flush. The buffer cap is measured in string length (UTF-16 units).
+
+**Why:**
+- A transferred `ArrayBuffer` is detached on the sending side, so its memory cannot be reused. A ring buffer's main benefit (no allocation, no GC) is lost.
+- A ring buffer shared by the main thread and the worker needs `SharedArrayBuffer`, which needs cross-origin isolation (COOP/COEP headers). A library cannot require that from its users.
+- The earlier SharedWorker-based design used a ring buffer to limit GC. Per-tab workers with transfer remove that need.
+- One allocation per flush (about 5 per second) costs little GC.
+- String length tracks in-memory size, which is what the cap protects. It can differ from the UTF-8 bytes on disk, which does not matter for the cap.
+
+**Not now:** A buffer pool (the worker returns used buffers for reuse). Add it only if a benchmark shows GC cost. Encoding bytes on every call (#014) stays a benchmark candidate.
+
+## 016. Segments are plain JSON Lines with a JSON header line; no frame headers (2026-11-01)
+
+**Decision:** A segment file is one JSON header line followed by record lines. There are no binary frame headers and no CRC32. This replaces #010's frames.
+
+```
+{"format":1,"minReader":1,"tab":"k3f9","seq0":0,"context":{...}}   <- header line (key names are a draft)
+{"ts":1793251200123,"lv":"info","msg":"..."}
+{"ts":1793251200125,"lv":"error","msg":"...","err":{...}}
+```
+
+- `seq` = header `seq0` + line index (amends #011). A worker continues `seq0` from its previous segment.
+- Every record line starts with `ts` then `lv`. `ts` is 13 digits, so the level sits at a fixed position and queries can filter without `JSON.parse`.
+- Crash recovery: find the first line that is incomplete, contains NUL bytes, or fails to parse, and truncate the file there. Never skip a bad line in the middle; that would shift line indexes and break `seq`. A file whose header line is broken holds no usable records and is deleted.
+- The header line is always uncompressed plain JSON, so any version can read `minReader` and decide to skip the file (#013).
+
+**Why:**
+- The frame header came from two assumed weaknesses of JSON Lines, never checked: parseable corruption and having to parse every line in queries. #012 (time range in file names) came later and already gives file-level skipping. The level and `ts` prefix check is far cheaper than parsing.
+- Real crash damage is a cut or zero-filled tail, which line checks catch. Recovery by line also keeps the complete lines of a half-written flush, where frames dropped the whole flush.
+- Survey of other systems: frames with length and checksum appear when the payload is binary, compressed, or encrypted and newlines cannot mark records (LevelDB/RocksDB WAL, Kafka, Vector and Beats disk buffers, Tencent Mars xlog). Text line logs have none (Docker `json-file`, pino, winston). Fluent Bit has a CRC32 option for its chunks, and it is off by default.
+- Without frames, the main thread sends bytes and the worker appends them. There are no per-flush tallies to pass, no header space to reserve, no CRC to compute, and no header byte layout to design.
+
+**Trade-offs:**
+- Corruption that still parses as valid JSON is not detected. After sealing, upload's `sha256` (#007) covers the file.
+- Queries scan every line of a segment instead of skipping frames. Estimated tens of ms per 8MB segment, to be benchmarked. Queries are rare and off the write path.
+- Per-flush compression or encryption would need frames again. That would be a new format version under #013, and the v1 reader stays.
+
+
+## 017. Flush triggers: lazy 200ms timer, 256K-character size, and error with a 50ms gap (2026-11-01)
+
+**Decision:** The main thread flushes its string queue when any of these is true. The numbers are drafts to tune by benchmark.
+- **Timer:** when the first record enters an empty queue, start a 200ms timer. No timer runs while the queue is empty.
+- **Size:** the queue holds more than 256K characters.
+- **Error:** an `error` record schedules a flush in a microtask. If the last flush was less than 50ms ago, the flush moves to the 50ms mark.
+
+Flushes on `visibilitychange` / `pagehide` and a user-called `flush()` are decided separately.
+
+**Why:**
+- The timer bounds crash loss. Starting it only when there is data keeps idle tabs from waking 5 times a second, which matters for mobile battery.
+- Without a size trigger, a 100k/s burst fills about 4M characters per 200ms, which reaches the draft 4MB cap within one interval. Records would be dropped while the worker sits idle, and one large join and encode would block the main thread.
+- An error often comes right before a renderer crash or kill. Close and navigation are covered by `pagehide`, so the benefit is narrow, but the cost is small. The microtask merges errors from the same task, and the 50ms gap limits error-driven flushes to 20 per second during an error storm.
+
+**Consequence:** With the size trigger, the main-thread queue never grows past about 256K characters, so a cap on the queue alone never fires. Data the worker has not written yet waits in the worker's message queue, which the main thread cannot see. The cap must cover the queue plus in-flight data. Whether the worker acknowledges writes is the next decision.
+
+## 018. Worker acknowledges each flush; the buffer cap covers queued plus in-flight data (2026-11-01)
+
+**Decision:** Each flush message carries an `id`. After `handle.write()`, the worker posts `{ id }` back to the main thread. The main thread remembers the size of each flush, adds it to `inFlight` when sending, and subtracts it when the ack arrives. The per-tab cap (draft 4MB) and the level-based rejection (#014) apply to `queue size + inFlight`.
+
+**Why:**
+- After #017 the main-thread queue stays under about 256K characters. Data the worker has not written waits in the worker's message queue, which neither side can measure. Without acks there is no real memory cap.
+- The worker can fall behind: it also converts segments for export and upload and runs crash recovery, and OPFS writes can be slow on mobile.
+- Dropping in the worker (instead of rejecting on the main thread) happens after the memory is already used, and the worker would have to parse records to drop by level.
+- The worker-to-main channel already exists (upload Blobs for `send()`, error reports). An ack is one small message per flush.
+- A stop in acks also tells the main thread that the worker has died or hung.
+
+**Known effect:** Acks are handled as main-thread tasks. While the main thread runs a long task, `inFlight` looks larger than it is, so rejection starts early. This errs toward dropping low-level records, never toward exceeding the cap. Rejection thresholds should allow for it.

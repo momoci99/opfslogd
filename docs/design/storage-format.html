@@ -11,9 +11,9 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>opfslogd 저장 포맷</h1>
-<p class="meta">상태: 3단계 완료 (남은 항목은 이후 단계로 넘김) · 최종 수정 2026-10-29 · 관련 결정: <code>docs/decisions.md</code> #010, #011, #012, #013 · 상위 문서: <a href="architecture.html">architecture.html</a></p>
+<p class="meta">상태: 3단계 완료, 4단계에서 프레임 헤더 제거 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #010(대체됨), #011, #012, #013, #014, #016 · 상위 문서: <a href="architecture.html">architecture.html</a></p>
 
-<p class="lead">세그먼트 파일은 바이너리 프레임의 연속이고, 각 프레임 안에는 UTF-8 JSON Lines가 들어갑니다. 이 포맷은 라이브러리 내부 전용이며, 내보내기(export)와 업로드 때는 순수 JSON Lines로 변환합니다.</p>
+<p class="lead">세그먼트 파일은 JSON 헤더 한 줄과 그 뒤의 UTF-8 JSON Lines로 이루어진 텍스트 파일입니다. 바이너리 프레임은 쓰지 않습니다. 이 포맷은 라이브러리 내부 전용이며, 내보내기(export)와 업로드 때는 줄마다 탭 ID, seq, 전역 context를 채운 JSON Lines로 변환합니다.</p>
 
 <nav class="toc">
   <ol>
@@ -32,7 +32,7 @@
 
 <h2 id="premise">1. 전제: 파일 포맷이 곧 전송 포맷</h2>
 <ul>
-  <li>메인 스레드는 flush할 때 레코드를 바이트로 인코딩해 Worker에 <code>ArrayBuffer</code>로 transfer합니다.</li>
+  <li>메인 스레드는 <code>log()</code>를 호출할 때 레코드를 <code>JSON.stringify</code>로 직렬화해 둡니다(#014). flush할 때 이를 이어 붙여 바이트로 인코딩하고 Worker에 <code>ArrayBuffer</code>로 transfer합니다.</li>
   <li>Worker는 받은 바이트에 다시 인코딩하지 않고 그대로 파일에 덧붙입니다.</li>
   <li>그래서 직렬화는 <strong>메인 스레드에서 한 번만</strong> 일어납니다. 객체를 그대로 <code>postMessage</code>로 보내면 structured clone(직렬화 1회)과 Worker 쪽 재인코딩(1회)으로 두 번이 됩니다.</li>
   <li>결국 포맷 선택은 "메인 스레드가 가장 싸게 인코딩할 수 있는 형태가 무엇인가"의 문제입니다.</li>
@@ -45,76 +45,83 @@
   <tr><td>인코딩 속도</td><td>빠름. 네이티브 <code>JSON.stringify</code> + <code>TextEncoder.encodeInto</code></td><td>고정 필드는 빠르지만, 임의 객체는 JS로 구현한 인코더가 필요</td><td>A와 같음</td></tr>
   <tr><td>런타임 의존성</td><td>없음</td><td>직접 구현하거나 의존성 추가</td><td>없음</td></tr>
   <tr><td>크기</td><td>키 이름이 레코드마다 반복됨</td><td>가장 작음 (약 20~30% 절약)</td><td>A와 거의 같음</td></tr>
-  <tr><td>손상 감지</td><td>잘린 마지막 줄만 감지</td><td>길이와 CRC로 감지</td><td>프레임마다 길이와 CRC32로 감지</td></tr>
-  <tr><td>쿼리 시 건너뛰기</td><td>모든 줄을 파싱해야 함</td><td>레코드 단위로 가능</td><td>프레임 단위로 가능 (시간 범위, 레벨 비트마스크)</td></tr>
-  <tr><td>판정</td><td><span class="tag bad">탈락</span></td><td><span class="tag bad">탈락</span></td><td><span class="tag ok">채택</span></td></tr>
+  <tr><td>손상 감지</td><td>잘림, 0 바이트, 파싱 실패를 줄 단위로 감지. 파싱되는 손상은 못 잡음</td><td>길이와 CRC로 감지</td><td>프레임마다 길이와 CRC32로 감지</td></tr>
+  <tr><td>쿼리 시 거르기</td><td>파일명으로 파일 단위(#012). 파일 안에서는 줄 앞부분의 ts와 레벨을 문자열로 검사</td><td>레코드 단위로 가능</td><td>프레임 단위로 건너뜀 (시간 범위, 레벨 비트마스크)</td></tr>
+  <tr><td>판정</td><td><span class="tag ok">채택</span> (2026-11-01, #016)</td><td><span class="tag bad">탈락</span></td><td><span class="tag bad">철회</span> (3단계에서 채택했다가 4단계에서 철회)</td></tr>
 </table>
 </div>
-<div class="callout">레코드마다 바이너리 헤더를 붙이는 방식은 넣지 않았습니다. 프레임 단위로 건너뛰는 것만으로 쿼리에 충분하다고 봤습니다. 벤치마크에서 쿼리가 병목으로 나오면 포맷 버전을 올려 추가합니다.</div>
+
+<h3>C안(프레임)을 철회한 이유</h3>
+<p>3단계에서는 JSONL의 약점 두 가지를 메우려고 프레임 헤더를 넣었습니다. "파싱은 되는 손상을 못 잡는다"와 "쿼리할 때 모든 줄을 파싱해야 한다"였습니다. 4단계에서 메인 스레드와 Worker 사이 프로토콜을 정하다가 이 두 근거를 다시 따져 봤습니다.</p>
+<ul>
+  <li><strong>손상:</strong> 크래시로 실제로 생기는 손상은 꼬리가 잘리거나 0으로 채워지는 것입니다. 줄 단위 검사로 잡힙니다. 줄 단위로 복구하면 쓰다 끊긴 flush 안의 온전한 줄도 살릴 수 있습니다. 프레임 방식은 그 flush를 통째로 버립니다.</li>
+  <li><strong>쿼리:</strong> 3단계 뒤에 정한 #012(파일명에 시간 범위)로 파일 단위 거르기가 이미 생겼습니다. 파일 안에서는 줄이 항상 <code>{"ts":<i>13자리</i>,"lv":"</code>로 시작하므로, 파싱하지 않고 문자열 위치만 보고 거를 수 있습니다.</li>
+  <li><strong>비용:</strong> 프레임이 있으면 flush마다 집계값 전달, 헤더 자리 확보, CRC 계산, 헤더 바이트 배치 설계가 필요합니다. 빼면 메인 스레드는 바이트를 보내고 Worker는 덧붙이기만 합니다.</li>
+</ul>
+
+<h3>다른 시스템 사례</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>구조</th><th>사례</th><th>프레임을 쓰는 이유</th></tr>
+  <tr><td>프레임 + 체크섬</td><td>LevelDB/RocksDB WAL, SQLite WAL, Kafka, Vector 디스크 버퍼, Elastic Beats 디스크 큐</td><td>내용이 바이너리(직렬화 객체, 압축, 암호화)라 줄바꿈으로 레코드를 나눌 수 없음. DB WAL은 손상된 레코드가 재생되면 DB가 깨짐</td></tr>
+  <tr><td>블록 헤더 (체크섬 확인 안 됨)</td><td>Tencent Mars xlog (모바일 앱 로그)</td><td>블록마다 압축하고 암호화하므로 블록 경계가 필요</td></tr>
+  <tr><td>체크섬 선택 사항</td><td>Fluent Bit 파일 버퍼</td><td><code>storage.checksum</code>(CRC32) 기본값이 off</td></tr>
+  <tr><td>텍스트 줄</td><td>Docker <code>json-file</code>, pino, winston, syslog</td><td>프레임과 체크섬 없음</td></tr>
+</table>
+</div>
+<p>사례는 "내용이 바이너리, 압축, 암호화이면 프레임, 텍스트 줄이면 프레임 없음"으로 갈립니다. 압축이나 암호화를 나중에 넣게 되면 그때 프레임을 새 포맷 버전으로 추가합니다(#013).</p>
+<div class="callout">레코드마다 바이너리 헤더를 붙이는 방식도 넣지 않습니다. 벤치마크에서 쿼리가 병목으로 나오면 포맷 버전을 올려 검토합니다.</div>
 
 <h2 id="layout">3. 세그먼트 구조</h2>
 <figure>
-<svg viewBox="0 0 760 250" role="img" aria-label="세그먼트 파일은 파일 헤더 하나와 프레임 여러 개로 이루어집니다. 각 프레임은 프레임 헤더와 JSON Lines 페이로드로 구성됩니다.">
-  <rect x="20" y="20" width="140" height="60" rx="6" class="box main"/>
-  <text x="36" y="46" class="label">파일 헤더</text>
-  <text x="36" y="66" class="small">magic, 버전, tabId</text>
+<svg viewBox="0 0 760 220" role="img" aria-label="세그먼트 파일은 JSON 헤더 한 줄과 그 뒤의 레코드 줄들로 이루어집니다. flush마다 여러 줄이 덧붙고, 마지막 줄은 크래시로 잘릴 수 있습니다.">
+  <rect x="20" y="20" width="720" height="44" rx="6" class="box main"/>
+  <text x="36" y="40" class="label">헤더 줄 (JSON, 항상 평문)</text>
+  <text x="36" y="56" class="small">{"format":1,"minReader":1,"tab":"k3f9","seq0":0,"context":{…}}</text>
 
-  <rect x="170" y="20" width="180" height="60" rx="6" class="box ok"/>
-  <text x="186" y="46" class="label">프레임 1</text>
-  <text x="186" y="66" class="small">flush 1회분</text>
+  <rect x="20" y="72" width="720" height="36" rx="6" class="box ok"/>
+  <text x="36" y="95" class="small">{"ts":1793251200123,"lv":"info","msg":"…"}          ← seq0 + 0</text>
 
-  <rect x="360" y="20" width="180" height="60" rx="6" class="box ok"/>
-  <text x="376" y="46" class="label">프레임 2</text>
-  <text x="376" y="66" class="small">flush 1회분</text>
+  <rect x="20" y="116" width="720" height="36" rx="6" class="box ok"/>
+  <text x="36" y="139" class="small">{"ts":1793251200125,"lv":"error","msg":"…","err":{…}} ← seq0 + 1</text>
 
-  <rect x="550" y="20" width="190" height="60" rx="6" class="box warn"/>
-  <text x="566" y="46" class="label">프레임 N</text>
-  <text x="566" y="66" class="small">크래시로 잘릴 수 있음</text>
-
-  <path d="M170,82 L40,130" class="line dash"/>
-  <path d="M350,82 L740,130" class="line dash"/>
-
-  <rect x="20" y="130" width="300" height="100" rx="6" class="box main"/>
-  <text x="36" y="154" class="label">프레임 헤더 (고정 길이)</text>
-  <text x="36" y="176" class="small">magic · payload 길이 · CRC32 · 레코드 수</text>
-  <text x="36" y="196" class="small">ts 최솟값/최댓값 · seq 범위</text>
-  <text x="36" y="216" class="small">레벨 비트마스크</text>
-
-  <rect x="330" y="130" width="410" height="100" rx="6" class="box"/>
-  <text x="346" y="154" class="label">payload (UTF-8 JSON Lines)</text>
-  <text x="346" y="178" class="small">{"ts":…,"lv":"info","msg":"…"}\n</text>
-  <text x="346" y="198" class="small">{"ts":…,"lv":"error","msg":"…"}\n</text>
-  <text x="346" y="218" class="small">…</text>
+  <rect x="20" y="160" width="720" height="44" rx="6" class="box warn"/>
+  <text x="36" y="180" class="label">마지막 줄</text>
+  <text x="36" y="196" class="small">크래시로 잘리거나 0으로 채워질 수 있음 → 복구 때 잘라냄</text>
 </svg>
-<figcaption>flush 한 번이 프레임 하나가 됩니다. 프레임 헤더만 읽어도 그 프레임에 어떤 시간대, 어떤 레벨의 로그가 있는지 알 수 있습니다.</figcaption>
+<figcaption>flush 한 번은 줄 여러 개를 덧붙일 뿐이고, flush 경계는 파일에 남지 않습니다. 파일을 그대로 열어 읽을 수 있습니다.</figcaption>
 </figure>
 
-<h3>프레임 헤더 필드 (초안)</h3>
-<p>필드 목록은 확정했고, 바이트 배치와 크기는 미결정입니다.</p>
+<h3>헤더 줄 (초안)</h3>
+<p>키 이름은 초안이며 구현할 때 확정합니다. 레코드 줄은 <code>{"ts":</code>로 시작하므로 헤더 줄과 구별됩니다.</p>
 <div class="table-wrap">
 <table>
-  <tr><th>필드</th><th>용도</th></tr>
-  <tr><td>magic</td><td>프레임 시작 표시. 복구할 때 위치 확인</td></tr>
-  <tr><td>headerLength</td><td>프레임 헤더 길이. 새 버전이 헤더 끝에 필드를 추가해도 이전 버전은 이 길이만큼 건너뛰고 읽음</td></tr>
-  <tr><td>flags</td><td>16비트. 지금은 0. 압축 같은 호환되지 않는 기능을 비트로 표시. 이전 버전은 모르는 비트가 켜진 프레임을 읽지 않음</td></tr>
-  <tr><td>payload 길이</td><td>다음 프레임 위치 계산, 잘린 프레임 감지</td></tr>
-  <tr><td>CRC32</td><td>payload 손상 감지. JS 구현으로 수백 MB/s가 나오고, 목표 처리량은 약 2MB/s라 비용은 무시할 수준</td></tr>
-  <tr><td>레코드 수</td><td>통계, 버린 건수 계산</td></tr>
-  <tr><td>ts 최솟값/최댓값</td><td>시간 범위 쿼리에서 프레임 건너뛰기</td></tr>
-  <tr><td>seq 범위</td><td>탭 안 순서, 누락 감지</td></tr>
-  <tr><td>레벨 비트마스크</td><td>레벨 쿼리에서 프레임 건너뛰기 (예: error가 없는 프레임은 파싱하지 않음)</td></tr>
+  <tr><th>키</th><th>용도</th></tr>
+  <tr><td><code>format</code></td><td>이 파일을 쓴 포맷 버전 (#013의 <code>formatVersion</code>)</td></tr>
+  <tr><td><code>minReader</code></td><td>읽는 데 필요한 최소 버전 (#013의 <code>minReaderVersion</code>)</td></tr>
+  <tr><td><code>tab</code></td><td>탭 ID. 파일명에도 있지만 파일 하나만 꺼내 봐도 알 수 있게 둠</td></tr>
+  <tr><td><code>seq0</code></td><td>이 파일 첫 줄의 seq. 같은 Worker의 이전 세그먼트에서 이어서 셈</td></tr>
+  <tr><td><code>context</code></td><td>전역 context (#011)</td></tr>
 </table>
 </div>
 
-<h3>브라우저에서 바이너리 다루기</h3>
-<p>OPFS의 sync handle은 원래 바이트(<code>ArrayBuffer</code>, <code>TypedArray</code>)만 받습니다. 텍스트도 <code>TextEncoder</code>로 바이트로 바꿔서 씁니다. 프레임 헤더는 <code>DataView</code>로 정해진 위치에 정수와 실수를 기록합니다.</p>
-<pre><code>const view = new DataView(buf)
-view.setUint32(0, MAGIC)
-view.setUint32(4, payload.byteLength, true)  // little-endian
-view.setUint32(8, crc32(payload), true)
-view.setFloat64(16, minTs, true)
-new Uint8Array(buf, HEADER_SIZE).set(payload)
-handle.write(new Uint8Array(buf), { at: offset })</code></pre>
+<h3>규칙</h3>
+<ul>
+  <li><strong>키 순서 고정:</strong> 레코드 줄은 항상 <code>ts</code>, <code>lv</code> 순서로 시작합니다. ts가 13자리 고정이라 레벨이 줄의 고정 위치에 오고, 쿼리가 <code>JSON.parse</code> 없이 거를 수 있습니다.</li>
+  <li><strong>헤더 줄은 항상 평문 JSON:</strong> 나중에 압축 같은 기능이 생겨도 헤더 줄은 그대로 둡니다. 어떤 버전이든 <code>minReader</code>를 읽고 이 파일을 건너뛸지 판단할 수 있어야 합니다.</li>
+  <li><strong>줄 경계:</strong> <code>JSON.stringify</code>는 문자열 안의 줄바꿈을 <code>\n</code>으로 이스케이프하므로, 레코드 내용이 줄 경계를 깨지 않습니다.</li>
+</ul>
+
+<h3>브라우저에서 파일에 쓰기</h3>
+<p>OPFS의 sync handle은 바이트(<code>ArrayBuffer</code>, <code>TypedArray</code>)만 받습니다. 텍스트도 <code>TextEncoder</code>로 바이트로 바꿔서 씁니다.</p>
+<pre><code>// 메인 스레드 (flush)
+const payload = lines.join('\n') + '\n'
+const buf = new Uint8Array(payload.length * 3)        // UTF-8 최대 크기
+const { written } = new TextEncoder().encodeInto(payload, buf)
+worker.postMessage(buf.buffer, [buf.buffer])           // + written
+
+// Worker
+handle.write(new Uint8Array(buffer, 0, written), { at: offset })</code></pre>
 
 <h2 id="schema">4. 레코드 스키마</h2>
 <p>내부 JSONL 한 줄의 형태입니다.</p>
@@ -134,9 +141,9 @@ handle.write(new Uint8Array(buf), { at: offset })</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>값</th><th>위치</th><th>이유</th></tr>
-  <tr><td><code>tab</code> (탭 ID)</td><td>파일 헤더</td><td>세그먼트 하나는 탭 하나 소유</td></tr>
-  <tr><td><code>seq</code> (탭 안 순번)</td><td>프레임 헤더의 seq 시작값 + 줄 번호</td><td>계산으로 복원 가능</td></tr>
-  <tr><td>전역 context (앱 버전, 세션 ID 등)</td><td>파일 헤더</td><td><code>init()</code>에서 한 번 정해지는 값</td></tr>
+  <tr><td><code>tab</code> (탭 ID)</td><td>헤더 줄</td><td>세그먼트 하나는 탭 하나 소유</td></tr>
+  <tr><td><code>seq</code> (탭 안 순번)</td><td>헤더 줄의 <code>seq0</code> + 줄 번호</td><td>계산으로 복원 가능</td></tr>
+  <tr><td>전역 context (앱 버전, 세션 ID 등)</td><td>헤더 줄</td><td><code>init()</code>에서 한 번 정해지는 값</td></tr>
 </table>
 </div>
 <p>export와 upload에서 JSONL로 변환할 때 이 값들을 각 줄에 다시 채워 넣습니다. 레코드마다 수십 바이트를 아끼며, 초당 1만 건이면 초당 수백 KB에 해당합니다.</p>
@@ -169,14 +176,17 @@ done/     1793251200123_1793251260456_k3f9.seg
 
 <h2 id="recovery">6. 크래시 복구</h2>
 <ol>
-  <li>Worker가 세그먼트를 열 때, 파일 헤더 다음부터 프레임을 차례로 검사합니다.</li>
-  <li>magic이 맞지 않거나, 남은 길이가 payload 길이보다 짧거나, CRC가 맞지 않는 첫 프레임을 찾습니다.</li>
-  <li>그 위치에서 파일을 잘라냅니다(<code>handle.truncate()</code>). 잃는 것은 마지막 flush 한 번분입니다.</li>
+  <li>정리 담당 탭의 Worker가 주인 없는 <code>active/</code> 세그먼트를 열고, 헤더 줄 다음부터 줄을 차례로 검사합니다.</li>
+  <li><code>\n</code>으로 끝나지 않거나, NUL 바이트가 있거나, 파싱되지 않는 첫 줄을 찾습니다.</li>
+  <li>그 줄의 시작 위치에서 파일을 잘라냅니다(<code>handle.truncate()</code>). 쓰다 끊긴 flush 안에서도 온전히 써진 줄은 살아남습니다.</li>
+  <li>헤더 줄 자체가 깨진 파일은 쓸 수 있는 레코드가 없으므로 삭제합니다.</li>
 </ol>
+<div class="callout">중간의 나쁜 줄 하나만 건너뛰고 뒤를 살리지 않습니다. 그러면 뒤 줄들의 줄 번호가 밀려서 <code>seq = seq0 + 줄 번호</code> 계산이 틀어집니다. 첫 번째 나쁜 줄에서 잘라내기만 합니다.</div>
+<p>잡지 못하는 것: 디스크에서 내용이 바뀌었는데 결과가 우연히 유효한 JSON인 경우입니다. 드물고, 결과는 로그 한 줄의 값이 틀리는 정도입니다. 봉인한 뒤에는 업로드용 <code>sha256</code>(#007)이 있습니다.</p>
 
 <h2 id="external">7. 외부로 내보내는 포맷</h2>
 <ul>
-  <li>export와 upload는 프레임 헤더를 걷어낸 <strong>순수 JSON Lines</strong>를 내보냅니다. 변환은 Worker에서 합니다.</li>
+  <li>export와 upload는 헤더 줄을 빼고, 줄마다 <code>tab</code>, <code>seq</code>, 전역 context를 채운 <strong>JSON Lines</strong>를 내보냅니다. 변환은 Worker에서 합니다.</li>
   <li>사용자와 백엔드는 내부 포맷을 몰라도 됩니다. 내부 포맷 버전을 올려도 외부에는 영향이 없습니다.</li>
   <li>업로드 <code>meta.sha256</code>은 변환된 JSONL을 기준으로 계산합니다. 서버가 실제로 받는 바이트와 같아야 검증할 수 있기 때문입니다.</li>
 </ul>
@@ -187,8 +197,8 @@ done/     1793251200123_1793251260456_k3f9.seg
 <table>
   <tr><th>참고</th><th>배운 점</th><th>적용</th></tr>
   <tr><td>SQLite</td><td>파일 헤더에 쓰기 버전과 읽기 버전을 따로 둠. 읽기 버전만 감당할 수 있으면 열 수 있음</td><td>파일 헤더에 <code>formatVersion</code>과 <code>minReaderVersion</code></td></tr>
-  <tr><td>Protobuf</td><td>모르는 필드는 무시함. 필드를 추가해도 호환됨</td><td>프레임 헤더에 <code>headerLength</code>. JSON 키 추가도 호환되는 변경</td></tr>
-  <tr><td>Kafka</td><td>레코드 묶음마다 magic과 16비트 attributes. 압축 코덱 등을 비트로 표시</td><td>프레임 헤더에 <code>flags</code></td></tr>
+  <tr><td>Protobuf</td><td>모르는 필드는 무시함. 필드를 추가해도 호환됨</td><td>헤더 줄과 레코드 줄 모두 JSON이라 모르는 키는 무시. 키 추가는 호환되는 변경</td></tr>
+  <tr><td>Kafka</td><td>레코드 묶음마다 magic과 16비트 attributes. 압축 코덱 등을 비트로 표시</td><td>적용 안 함 (#016에서 프레임 제거). 호환되지 않는 기능은 <code>minReader</code>를 올려 표시</td></tr>
   <tr><td>IndexedDB</td><td>새 버전이 열리면 이전 탭에 <code>versionchange</code>를 알림</td><td>v0.1에는 필요 없음. 이전 탭은 모르는 파일을 건너뛰기만 하면 안전</td></tr>
 </table>
 </div>
@@ -197,8 +207,8 @@ done/     1793251200123_1793251260456_k3f9.seg
 <ol>
   <li><strong>파일명 규칙은 바꾸지 않습니다.</strong> 어떤 버전이든 이름만으로 시간 범위, 상태, 주인을 알 수 있어야 합니다.</li>
   <li><strong>쓰기는 항상 최신 포맷</strong>으로 합니다. <strong>읽기는 이전 포맷도 모두 지원</strong>합니다. 0.x여도 지킵니다. 기기에 남은 <code>pending</code> 로그를 업그레이드 때문에 잃으면 안 되기 때문입니다.</li>
-  <li>헤더 끝에 필드를 추가하거나 JSON에 키를 추가하는 것은 <strong>호환되는 변경</strong>입니다. <code>minReaderVersion</code>을 올리지 않습니다.</li>
-  <li>정말로 호환이 깨지는 변경(예: payload 압축)일 때만 <code>minReaderVersion</code>을 올리거나 <code>flags</code> 비트를 씁니다.</li>
+  <li>헤더 줄이나 레코드 줄에 JSON 키를 추가하는 것은 <strong>호환되는 변경</strong>입니다. <code>minReader</code>를 올리지 않습니다.</li>
+  <li>정말로 호환이 깨지는 변경(예: 압축, 암호화, 프레임 재도입)일 때만 <code>minReader</code>를 올립니다.</li>
 </ol>
 
 <h3>이전 버전이 읽을 수 없는 파일을 만났을 때</h3>
@@ -208,27 +218,27 @@ done/     1793251200123_1793251260456_k3f9.seg
   <tr><td>쿼리, export</td><td>건너뛰고, 건너뛴 사실을 결과에 표시</td><td>읽을 수 없음</td></tr>
   <tr><td>보존 정리</td><td>이름 기준으로 평소처럼 삭제</td><td>파일명 규칙은 고정이므로 안전</td></tr>
   <tr><td>업로드</td><td>건너뛰고 <code>pending</code>에 둠. 새 버전 탭이 업로드</td><td>JSONL로 변환할 수 없음</td></tr>
-  <tr><td>크래시 복구</td><td>손대지 않음</td><td>프레임 구조를 모름</td></tr>
+  <tr><td>크래시 복구</td><td>손대지 않음</td><td>줄 구조가 같다고 장담할 수 없음</td></tr>
 </table>
 </div>
 
 <h2 id="open">9. 미결정 항목</h2>
 <ul>
   <li>내보낸 JSONL에서 전역 context를 담는 필드 이름. 5단계 공개 API에서 <code>init()</code> 옵션 이름과 함께 정합니다.</li>
-  <li>프레임 헤더와 파일 헤더의 바이트 배치. 필드 목록은 확정했고, 배치는 구현 단계에서 벤치마크와 함께 정합니다.</li>
+  <li>헤더 줄의 키 이름. 구현할 때 정합니다.</li>
 </ul>
 
 <h3>보류 (나중에 다시 검토)</h3>
 <ul>
-  <li><strong>압축.</strong> 저장 시 압축(봉인 시 파일 전체 또는 프레임별), export와 upload의 gzip 옵션 모두 보류합니다. 보관 기간이 실제로 부족한지 측정한 뒤 판단합니다.</li>
+  <li><strong>압축.</strong> 저장 시 압축(봉인 시 파일 전체, 또는 프레임을 다시 도입해 flush별), export와 upload의 gzip 옵션 모두 보류합니다. 보관 기간이 실제로 부족한지 측정한 뒤 판단합니다.</li>
 </ul>
 
 <h2 id="verify">10. 검증할 것</h2>
 <div class="table-wrap">
 <table>
   <tr><th>항목</th><th>왜 필요한가</th></tr>
-  <tr><td>임의 객체 인코딩: 네이티브 <code>JSON.stringify</code> vs JS 바이너리 인코더(msgpackr 등)</td><td>C안 채택의 핵심 근거. msgpackr는 특정 조건에서 JSON보다 빠르다고 주장함</td></tr>
-  <tr><td>JS CRC32 처리량 (모바일 포함)</td><td>메인 스레드나 Worker의 부담 확인</td></tr>
+  <tr><td>임의 객체 인코딩: 네이티브 <code>JSON.stringify</code> vs JS 바이너리 인코더(msgpackr 등)</td><td>JSONL 채택의 핵심 근거. msgpackr는 특정 조건에서 JSON보다 빠르다고 주장함</td></tr>
+  <tr><td>8MB 세그먼트 쿼리 시간 (줄 앞부분 문자열 검사, 모바일 포함)</td><td>프레임 없이 쿼리 속도가 충분한지 확인 (#016)</td></tr>
 </table>
 </div>
 

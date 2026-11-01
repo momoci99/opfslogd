@@ -10,7 +10,7 @@
 <main>
 
 <h1>opfslogd 설계 현황</h1>
-<p class="meta">최종 수정 2026-10-29 · 브랜치 <code>docs/architecture-design</code> · 결정 기록: <code>docs/decisions.md</code></p>
+<p class="meta">최종 수정 2026-11-01 · 브랜치 <code>docs/architecture-design</code> · 결정 기록: <code>docs/decisions.md</code></p>
 
 <p class="lead">설계는 아래 순서로 진행합니다. 각 단계의 결과는 단계별 문서와 <code>docs/decisions.md</code>에 남깁니다. 새 세션은 이 페이지에서 시작합니다.</p>
 
@@ -20,8 +20,8 @@
   <tr><th>단계</th><th>상태</th><th>문서</th><th>결정</th></tr>
   <tr><td>1. 요구사항과 성능 목표</td><td><span class="tag ok">완료</span></td><td><a href="architecture.html#requirements">architecture.html</a></td><td>—</td></tr>
   <tr><td>2. 쓰기 아키텍처, 업로드, Worker 배포</td><td><span class="tag ok">완료</span></td><td><a href="architecture.html">architecture.html</a></td><td>#006, #007, #009</td></tr>
-  <tr><td>3. 저장 포맷</td><td><span class="tag ok">완료</span></td><td><a href="storage-format.html">storage-format.html</a></td><td>#010 ~ #013</td></tr>
-  <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag warn">다음</span></td><td>—</td><td>—</td></tr>
+  <tr><td>3. 저장 포맷</td><td><span class="tag ok">완료</span></td><td><a href="storage-format.html">storage-format.html</a></td><td>#010(→#016) ~ #013</td></tr>
+  <tr><td>4. 메인 스레드 ↔ Worker 프로토콜</td><td><span class="tag warn">진행 중</span></td><td><a href="protocol.html">protocol.html</a></td><td>#014 ~ #018</td></tr>
   <tr><td>5. 공개 API</td><td>대기</td><td>—</td><td>—</td></tr>
   <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td>대기</td><td>—</td><td>—</td></tr>
 </table>
@@ -35,7 +35,8 @@
   <li>업로드는 사용자가 넘기는 <code>send()</code> 콜백으로 합니다. resolve되면 done, reject되면 재시도합니다.</li>
   <li>세그먼트 상태: <code>active</code> → <code>pending</code> → <code>done</code> → 삭제. 용량을 넘으면 done부터, 그다음 오래된 pending부터 삭제합니다.</li>
   <li>Worker는 별도 파일로 배포하고 <code>workerUrl</code> 옵션을 둡니다. 인라인 빌드는 하지 않습니다.</li>
-  <li>세그먼트는 바이너리 프레임(CRC32, 시간 범위, 레벨 비트마스크) 안에 JSON Lines를 담습니다. 외부로는 순수 JSONL만 내보냅니다.</li>
+  <li>세그먼트는 JSON 헤더 한 줄 + 순수 JSON Lines입니다. 바이너리 프레임과 CRC32는 쓰지 않습니다(#016, 4단계에서 #010을 고침). 외부로는 tab, seq, 전역 context를 채운 JSONL을 내보냅니다.</li>
+  <li><code>log()</code>를 호출할 때 바로 <code>JSON.stringify</code>합니다(#014). 메인 스레드 버퍼는 문자열 배열 + 길이 카운터이고, flush마다 새 버퍼 하나를 Worker로 transfer합니다(#015).</li>
   <li>레코드 필드는 <code>ts</code>(<code>Date.now()</code>), <code>lv</code>, <code>msg</code>, <code>ctx</code>, <code>err</code>입니다. tab, seq, 전역 context는 헤더에 둡니다.</li>
   <li>압축은 보류합니다.</li>
 </ul>
@@ -43,12 +44,12 @@
 <h2 id="next">4단계에서 다룰 것</h2>
 <p>이전 단계에서 넘어온 항목도 포함합니다.</p>
 <ul>
-  <li><strong>링버퍼:</strong> 탭당 상한(초안 4MB), 레코드를 담는 형태(객체 그대로 vs 바로 인코딩)</li>
-  <li><strong>인코딩 위치:</strong> JSON 인코딩은 메인 스레드에서 flush할 때 한 번. CRC32와 프레임 헤더는 메인과 Worker 중 어디서 만들지</li>
-  <li><strong>flush 시점:</strong> 주기(초안 200ms), 버퍼 크기 기준, <code>error</code> 레벨이면 즉시 flush할지</li>
+  <li><s>버퍼에 담는 형태</s> → <code>log()</code> 때 직렬화 (#014), 링버퍼 대신 문자열 큐 (#015)</li>
+  <li><s>프레임 헤더를 누가 만들지</s> → 프레임 헤더 제거 (#016)</li>
+  <li><s>flush 시점</s> → 200ms 타이머(데이터 있을 때만) + 256K자 + error(50ms 간격) (#017)</li>
+  <li><s>Worker 응답과 버퍼 상한</s> → flush마다 ack, 상한(초안 4MB)은 메인 버퍼 + 응답 안 온 양 (#018)</li>
   <li><strong><code>pagehide</code> / <code>visibilitychange</code> 처리:</strong> 닫힐 때 최선의 flush, 세그먼트 봉인</li>
   <li><strong>과부하 시 버리기:</strong> debug부터 버리고 error는 보존. 버린 건수를 레코드로 남기는 방식</li>
-  <li><strong>Worker 응답:</strong> 쓰기 완료 확인(ack)이 필요한지, 역압(backpressure) 신호</li>
   <li><strong>백그라운드에서 멈춘 탭의 Lock:</strong> 업로드 Lock을 쥔 채 멈추는 문제. 숨겨질 때 Lock을 내려놓는 방안 (<a href="architecture.html#upload">업로드</a>의 위험 항목)</li>
   <li><strong>같은 탭 안 <code>subscribe()</code></strong>를 어느 지점에서 호출할지 (flush 전 또는 후)</li>
 </ul>
@@ -56,7 +57,7 @@
 <h2 id="later">5단계 이후로 넘긴 것</h2>
 <ul>
   <li>내보낸 JSONL에서 전역 context를 담는 필드 이름. <code>init({ context })</code> 옵션 이름과 함께 정합니다.</li>
-  <li>프레임 헤더와 파일 헤더의 바이트 배치. 구현할 때 벤치마크와 함께 정합니다.</li>
+  <li>세그먼트 헤더 줄의 키 이름. 구현할 때 정합니다.</li>
   <li>검증할 것 목록: <a href="architecture.html#verify">architecture.html</a>, <a href="storage-format.html#verify">storage-format.html</a></li>
 </ul>
 
