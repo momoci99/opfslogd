@@ -93,3 +93,5 @@ vitest.config.ts     test environment
 When you make a design decision that others will ask "why?" about, add an entry to `docs/decisions.md`.
 
 Longer design documents (architecture, flows, state diagrams, targets) go in `docs/design/*.html`, hand-written readable HTML, not minified. Do not duplicate the same content in Markdown. See `docs/decisions.md` #008.
+
+**Documentation is bilingual: English and Korean** (`docs/decisions.md` #082). This covers README, CONTRIBUTING, `docs/`, new decision entries, and GitHub release notes. Write the English text first, then the same content in Korean (README: a `# 한국어` section at the end). Code, code comments, commit messages, and PR titles stay English only. Documents written before #082 may be in one language; add the other when you rewrite them.

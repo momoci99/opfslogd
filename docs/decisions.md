@@ -1238,3 +1238,13 @@ if (isDev) logger.debug('scroll', { y })
 **Decision:** The build runs twice (`tsdown.config.ts`): once for `index.js` with types, once for `worker.js` without. `worker.js` imports nothing, so an app can copy that one file and pass its URL as `workerUrl` (#009). `pnpm check:vite` has a case for it: a Vite app that serves only a copied `worker.js`.
 
 **Why:** With one build, `index.js` and `worker.js` shared a chunk with a hashed name (`names-<hash>.js`). Copying `worker.js` alone, as the README says, then failed with `worker-load-failed`, and the hash changes on every build, so the docs could not name the extra file. The duplicated code is about 1KB.
+
+## 082. Documentation is written in English and Korean (2026-11-01)
+
+**Decision:** From now on, documentation is written in both English and Korean: README, CONTRIBUTING, `docs/`, new entries in this file, and GitHub release notes. The English text comes first, then the same content in Korean. Code, code comments, commit messages, and PR titles stay English only. Documents written before this decision may be in one language; the other is added when they are rewritten.
+
+**Why:** The package is public on npm, so English is needed for most readers. The maintainer and the first users read Korean, and the design work so far has been discussed in Korean.
+
+**결정:** 앞으로 문서는 영어와 한국어를 함께 씁니다. 대상은 README, CONTRIBUTING, `docs/`, 이 파일의 새 항목, GitHub 릴리스 노트입니다. 영어를 먼저, 같은 내용의 한국어를 뒤에 둡니다. 코드, 코드 주석, 커밋 메시지, PR 제목은 영어로만 씁니다. 이 결정 전에 쓴 문서는 한 언어로만 되어 있을 수 있고, 다시 쓸 때 다른 언어를 더합니다.
+
+**이유:** 패키지가 npm에 공개되어 있으니 대부분의 독자를 위해 영어가 필요합니다. 메인테이너와 첫 사용자는 한국어를 읽고, 지금까지의 설계 논의도 한국어로 했습니다.
