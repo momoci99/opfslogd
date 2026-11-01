@@ -1,5 +1,5 @@
 import { type Row, runAll } from './cases'
-import { runLib, runLib2 } from './lib-cases'
+import { runLib, runLib2, runLib3 } from './lib-cases'
 import { formatUs } from './harness'
 
 declare global {
@@ -29,6 +29,7 @@ window.__results = new Promise((r) => setTimeout(r, 100)).then(() =>
   runAll(show).then(async (rows) => {
     rows.push(...(await runLib(show)))
     rows.push(...(await runLib2(show)))
+    rows.push(...(await runLib3(show)))
     status.textContent = `${navigator.userAgent} · done`
     return rows
   }),

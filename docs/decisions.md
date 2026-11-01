@@ -1026,7 +1026,9 @@ Measurements that need the implementation (flush interval and size #017, drops u
 - Active segments count toward `retention.maxBytes` but cannot be deleted (#052). Five tabs with full 8MB active segments hold 40MB of the 50MB default.
 - Each retention deletion removes 16% of 50MB at once.
 
-At 2MB: about 16 seconds at 1Mbps, 10MB for five full active segments, 4% per deletion. The size limit only matters above about 35 records per second (below that, the 5-minute age limit rotates first), so apps that log little see no difference.
+At 2MB: about 16 seconds at 1Mbps, 10MB for five full active segments, 4% per deletion.
+
+> **Measured (2026-11-01, step 8):** the uploaded file is about 1.4 times the segment, because every exported line carries `tab`, `seq`, and `context` (#033). A full 2MB segment uploads as about 2.8MB, about 22 seconds at 1Mbps: still inside the 60-second `upload.timeoutMs` default (#045). Converting it and computing its sha256 takes 14-43ms in the worker. docs/design/benchmark.html#impl-results-3 The size limit only matters above about 35 records per second (below that, the 5-minute age limit rotates first), so apps that log little see no difference.
 
 **Trade-off:** apps that log a lot send about 4 times as many uploads (about 6 per minute at 1,000 records per second). A very small `retention.maxBytes` (near 2MB) still deletes coarsely; deriving the segment size from it was rejected as an extra rule.
 

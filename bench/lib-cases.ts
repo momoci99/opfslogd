@@ -259,3 +259,103 @@ export async function runLib2(log: (row: LibRow) => void): Promise<LibRow[]> {
   })
   return rows
 }
+
+// ---- 10: upload preparation and export (units 8, 9) ----
+
+/** Starts the library worker on its own OPFS root and writes `mb` of medium records. */
+async function workerWithData(mb: number, upload: boolean): Promise<{
+  call: (call: unknown) => Promise<unknown>
+  close: () => Promise<void>
+}> {
+  const root = `opfslogd-bench-${Date.now().toString(36)}`
+  const worker = new Worker(coreWorkerUrl, { type: 'module' })
+  const waiting = new Map<number, (m: FromWorker) => void>()
+  let ackWaiter: ((m: FromWorker) => void) | undefined
+  worker.onmessage = (e: MessageEvent<FromWorker>): void => {
+    const m = e.data
+    if (m.type === 'reply') {
+      waiting.get(m.id)?.(m)
+      waiting.delete(m.id)
+    } else ackWaiter?.(m)
+  }
+  const next = (): Promise<FromWorker> => new Promise((r) => (ackWaiter = r))
+  worker.postMessage({
+    type: 'init', namespace: 'bench', tabId: newTabId(), context: '{"version":"2.3.1"}',
+    rotateMaxAgeMs: 3_600_000, rotateMaxBytes: 2_000_000, upload,
+    retentionMaxBytes: 1e9, retentionMaxAgeMs: 1e12, root,
+  } satisfies ToWorker)
+  await next()
+  const q = new RecordQueue(1e9)
+  const enc = new TextEncoder()
+  let i = 0
+  let id = 1
+  for (let written = 0; written < mb * 1_000_000; ) {
+    while (q.queuedChars < FLUSH_CHARS) {
+      const ts = Date.now() - 3_600_000 + i
+      q.push(serializeRecord(ts, 'info', 'checkout button clicked', ctxPool[i++ & (POOL - 1)]), 'info', ts)
+    }
+    const b = q.take(Date.now())
+    if (!b) break
+    const bytes = enc.encode(b.text)
+    written += bytes.length
+    worker.postMessage({ type: 'write', id: id++, buf: bytes.buffer, length: bytes.length, lines: b.lines, minTs: b.minTs, maxTs: b.maxTs } satisfies ToWorker, [bytes.buffer])
+    await next()
+    q.ack(b.id, true)
+  }
+  let callId = 1
+  return {
+    call: (call) =>
+      new Promise((resolve) => {
+        const cid = callId++
+        waiting.set(cid, (m) => resolve((m as { value: unknown }).value))
+        worker.postMessage({ type: 'call', id: cid, call } as ToWorker)
+      }),
+    close: async () => {
+      worker.postMessage({ type: 'close' } satisfies ToWorker)
+      await next()
+      worker.terminate()
+      await (await navigator.storage.getDirectory()).removeEntry(root, { recursive: true }).catch(() => {})
+    },
+  }
+}
+
+export async function runLib3(log: (row: LibRow) => void): Promise<LibRow[]> {
+  const rows: LibRow[] = []
+  const add = (group: string, name: string, us: number, note?: string): void => {
+    const row = { group, name, medianUs: us, minUs: us, calls: 1, note }
+    rows.push(row)
+    log(row)
+  }
+  const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? NaN
+
+  // 10a. One upload run step: convert a 2MB pending segment to exported JSONL + sha256 (#048, #079).
+  {
+    const w = await workerWithData(10, true) // 5 pending segments of about 2MB
+    const names = (await w.call({ op: 'list-pending' })) as string[]
+    const times: number[] = []
+    let size = 0
+    for (const name of names) {
+      const t0 = performance.now()
+      const p = (await w.call({ op: 'prepare', name })) as { meta?: { size: number } }
+      times.push((performance.now() - t0) * 1000)
+      size = p.meta?.size ?? size
+    }
+    add('10. upload / export', 'prepare one 2MB segment (convert + sha256, in worker)', median(times), `${names.length} segments, exported ${(size / 1e6).toFixed(1)} MB each`)
+    await w.close()
+  }
+  // 10b. exportLogs merge over 5 closed segments (#056, #080).
+  {
+    const w = await workerWithData(10, false)
+    const times: number[] = []
+    let size = 0
+    for (let k = 0; k < 3; k++) {
+      const t0 = performance.now()
+      const r = (await w.call({ op: 'export' })) as { file: Blob }
+      times.push((performance.now() - t0) * 1000)
+      size = r.file.size
+    }
+    add('10. upload / export', 'export 10MB (5 segments, in worker)', median(times), `output ${(size / 1e6).toFixed(1)} MB`)
+    await w.close()
+  }
+  return rows
+}

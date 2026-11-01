@@ -247,10 +247,41 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
   <li><strong>휴대폰에서 OPFS 측정은 <code>pnpm bench:serve</code>로 할 수 없습니다:</strong> LAN 주소의 http 페이지는 secure context가 아니어서 OPFS와 Worker 쓰기(7, 8번)가 동작하지 않습니다. Android는 USB 포트 포워딩(<code>localhost</code>)으로 열면 됩니다. iOS Safari는 https가 필요합니다.</li>
 </ul>
 
+<h3 id="impl-results-3">upload와 export (단위 8, 9 뒤)</h3>
+<p>같은 환경. 코드: <code>bench/lib-cases.ts</code>(10번). 중간 레코드로 채운 약 2MB 세그먼트 5개.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>측정 (Worker 안)</th><th>Chromium</th><th>Firefox</th><th>WebKit</th><th>Chromium 4x</th></tr>
+  <tr><td>upload 준비: 2MB 세그먼트를 export 줄로 변환 + sha256 (#048, #079)</td><td>22 ms</td><td>43 ms</td><td>14 ms</td><td>25 ms</td></tr>
+  <tr><td><code>exportLogs()</code> 병합: 세그먼트 5개(10MB, 출력 13MB) (#056, #080)</td><td>135 ms</td><td>239 ms</td><td>77 ms</td><td>137 ms</td></tr>
+</table>
+</div>
+<ul>
+  <li><strong>Chromium 4x는 Worker를 느리게 하지 않습니다:</strong> CPU throttling이 페이지에만 걸리는 것으로 보입니다. Worker 안 작업의 저사양 기기 값은 실기기에서 봐야 합니다.</li>
+  <li><strong>내보낸 파일은 세그먼트보다 약 40% 큽니다:</strong> 줄마다 <code>tab</code>, <code>seq</code>, <code>context</code>가 붙기 때문입니다(#033, 이 측정의 context는 <code>{"version":"2.3.1"}</code>). 2MB 세그먼트의 업로드 파일은 약 2.8MB이고, 1Mbps에서 약 22초입니다. <code>upload.timeoutMs</code> 기본값 60초(#045) 안에 들지만, #066이 잡은 16초보다 깁니다. context가 크면 더 커집니다.</li>
+  <li><strong>export 50MB(#052 상한 전체)</strong>는 이 비율이면 Worker에서 약 0.4 ~ 1.2초입니다. 메인 스레드는 기다리기만 합니다.</li>
+  <li>upload 실행 하나가 Lock을 쥐는 시간은 세그먼트마다 "준비(약 20 ~ 40ms) + <code>send()</code>"입니다. 대부분 네트워크 시간입니다.</li>
+</ul>
+
+<h3>업로드 요청 빈도 (계산)</h3>
+<p>측정이 아니라 세그먼트 크기 2MB(#066)와 로테이션 5분(#021)에서 나오는 값입니다. 레코드당 약 200바이트로 잡았습니다. 탭 하나가 계속 기록할 때 클라이언트 하나가 보내는 요청 수입니다.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>기록 속도</th><th>세그먼트가 닫히는 이유</th><th>요청 빈도</th><th>요청 하나의 크기(export)</th></tr>
+  <tr><td>1건/초</td><td>5분</td><td>5분에 1번</td><td>약 80KB</td></tr>
+  <tr><td>10건/초</td><td>5분</td><td>5분에 1번</td><td>약 0.8MB</td></tr>
+  <tr><td>약 35건/초</td><td>5분과 2MB가 비슷</td><td>5분에 1번</td><td>약 2.8MB</td></tr>
+  <tr><td>100건/초</td><td>2MB</td><td>100초에 1번</td><td>약 2.8MB</td></tr>
+  <tr><td>1,000건/초</td><td>2MB</td><td>10초에 1번</td><td>약 2.8MB</td></tr>
+  <tr><td>10,000건/초</td><td>2MB</td><td>1초에 1번 (업로드 대역폭 약 2.8MB/s 필요)</td><td>약 2.8MB</td></tr>
+</table>
+</div>
+<p>업로드는 <code>intervalMs</code>(1분)마다 쌓인 세그먼트를 한 번에 하나씩 보내므로(#047), 실제 요청은 1분마다 몰려서 나갑니다. 초당 1만 건을 계속 기록하는 앱은 회선이 그만큼 빠르지 않으면 pending이 쌓이고, retention 상한(#052)에서 오래된 pending부터 지워지며 drop 줄로 남습니다.</p>
+
 <h3>아직 재지 않은 것</h3>
 <ul>
-  <li>로그가 많은 앱의 업로드 요청 빈도, 탭 여러 개일 때 retention 동작 (세그먼트 2MB, #066): upload와 retention 구현(단위 7, 8) 뒤에 잽니다.</li>
-  <li>실제 저사양 휴대폰에서 8번(flush 고정 비용)</li>
+  <li>실제 저사양 휴대폰에서 8번(flush 고정 비용, #077)과 10번(Worker 안 작업)</li>
+  <li>탭 여러 개가 동시에 retention과 upload를 시도할 때: Lock 규칙(#022)은 테스트로 확인했고(<code>test/browser/retention.test.ts</code>, <code>upload.test.ts</code>), 실제 탭 여러 개의 장시간 동작은 실기기 목록에 둡니다.</li>
 </ul>
 
 <h2 id="manual">6. 실기기에서 직접 확인할 것</h2>
@@ -265,6 +296,8 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
   <li>느린 모바일 회선에서 2MB 세그먼트 업로드 시간 (#045, #066). 처음에는 8MB였음</li>
   <li>휴대폰에서 <code>pnpm bench:serve</code> 페이지 결과 (특히 저사양 Android, iOS Safari)</li>
   <li>장애 복구 직후 여러 클라이언트가 밀린 세그먼트를 한꺼번에 올릴 때의 부하 (#047)</li>
+  <li>저사양 휴대폰에서 flush 고정 비용(#077)과 Worker 안 작업(upload 준비, export). <code>bench:serve</code>의 http LAN 주소에서는 OPFS를 쓸 수 없으므로 Android USB 포트 포워딩(<code>localhost</code>)이나 https로 엽니다</li>
+  <li>탭 여러 개를 오래 열어 둘 때 retention과 upload가 한 탭에서만 도는지, 닫힌 탭의 파일이 복구되는지</li>
 </ul>
 
 </main>
