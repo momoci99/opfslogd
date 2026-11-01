@@ -179,6 +179,8 @@ new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'opf
 
 **To decide by benchmark:** keep strings and encode once at flush, or `encodeInto` bytes on every call.
 
+> **Measured (2026-11-01, step 8):** the library's whole `log()` path (admission check, `serializeRecord`, queue push) costs about 0.2-0.6µs for a medium record, 1.2-2.2µs for an error with a cause chain, and 1.0µs / 5.1µs with 4x CPU throttling. A rejected call costs a few ns. docs/design/benchmark.html#impl-results
+
 ## 015. Main-thread buffer is a string queue, not a ring buffer (2026-11-01)
 
 **Decision:** The main thread keeps serialized records in a plain array of strings with a running length counter. At flush it joins them, encodes them into one new `ArrayBuffer`, and transfers it to the worker. A new buffer is allocated per flush. The buffer cap is measured in string length (UTF-16 units).
@@ -1000,6 +1002,8 @@ Measurements that need the implementation (flush interval and size #017, drops u
 
 **To verify (implementation):** whether browsers write part of the data before throwing `QuotaExceededError`. The truncate stays either way; it costs almost nothing.
 
+> **Measured (2026-11-01, step 8):** neither Chromium nor Firefox throws `QuotaExceededError` from a sync handle `write()` when storage is full. Chromium writes part of the data and returns a bogus count (4294967288); Firefox writes nothing and returns 0. The worker therefore treats a write that returns a count other than the batch length as `quota`, and the truncate is required (Chromium leaves partial data). WebKit is on the manual device list. docs/design/benchmark.html#impl-results
+
 ## 065. No `persist()` option; apps call `navigator.storage.persist()` themselves (2026-11-01)
 
 **Decision:** The library never calls `navigator.storage.persist()` and has no option for it. The README tells apps that need logs to survive storage pressure to call it themselves. This replaces architecture.html's "the user turns it on with an option".
@@ -1145,6 +1149,8 @@ if (isDev) logger.debug('scroll', { y })
 - What a log loses without it is narrow: data that the browser already took but the OS had not yet stored when the whole device lost power or the OS crashed. A tab crash or kill is the common case, and data handed to the OS survives it.
 
 **To verify (implementation, step 10):** that a killed renderer keeps every acked write in Chromium, Firefox, and WebKit, and the cost of `flush()` per batch. If an engine loses acked writes, flush per batch there.
+
+> **Measured (2026-11-01, step 8):** after `SIGKILL` of the whole browser, all acked writes (11MB in 40 batches) were on disk in Chromium, Firefox, and WebKit. On macOS desktop, `flush()` after every write made no measurable difference to the write round trip (about 0.4-1.1ms per 257KB batch). Decision stands. Power loss was not tested. docs/design/benchmark.html#impl-results
 
 ## 075. Closed segments with no records are deleted; a closed-name clash raises `maxTs` by 1ms (2026-11-01)
 

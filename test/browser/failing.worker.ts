@@ -1,6 +1,7 @@
 // Test worker: the library worker, with sync handle writes that can be made to fail.
 // { type: 'test-fail', name, skip } lets `skip` writes pass, then makes the next one
-// store half its bytes and throw a DOMException with that name.
+// store half its bytes and throw a DOMException with that name. With name 'short', it
+// stores half and returns a wrong count instead, as Chromium does when storage is full.
 
 import '../../src/worker'
 
@@ -17,6 +18,7 @@ proto.write = function (buffer, options) {
   const { name } = fail
   fail = undefined
   write.call(this, buffer.subarray(0, Math.floor(buffer.length / 2)), options)
+  if (name === 'short') return 4294967288
   throw new DOMException('test failure', name)
 }
 

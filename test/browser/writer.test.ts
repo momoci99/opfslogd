@@ -249,6 +249,15 @@ describe('worker write path', () => {
       expect(header((await read(h, 'active', activeName(300, h.tabId)))[0]).seq0).toBe(3)
     })
 
+    it('treats a short write as quota, and rolls it back', async () => {
+      const h = await start({}, true)
+      await h.write([[100, 'info', 'kept']])
+      failWrite(h, 'short')
+      expect(await h.write([[200, 'info', 'lost']])).toMatchObject({ ok: false, reason: 'quota' })
+      const lines = await read(h, 'done', closedName(100, 100, h.tabId))
+      expect(lines).toHaveLength(2)
+    })
+
     it('reports other errors as write-failed', async () => {
       const h = await start({}, true)
       await h.write([[100, 'info', 'a']])

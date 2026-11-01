@@ -2,7 +2,9 @@
 //   pnpm bench          Chromium, Firefox, WebKit, and Chromium with 4x CPU throttling
 //   pnpm bench:serve    serve the page on the LAN to open it on a phone
 
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium, firefox, webkit } from 'playwright'
@@ -26,20 +28,27 @@ if (serveOnly) {
   console.log('Open the Network URL on the phone. Ctrl+C to stop.')
 } else {
   const url = server.resolvedUrls.local[0]
+  // --only=webkit runs one setup (for debugging).
+  const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7)
   const runs = [
     { label: 'chromium', type: chromium },
     { label: 'firefox', type: firefox },
     { label: 'webkit', type: webkit },
     // Rough stand-in for a low-end phone; real phones are checked by hand.
     { label: 'chromium 4x slow', type: chromium, throttle: 4 },
-  ]
+  ].filter((r) => !only || r.label === only)
   const table = new Map()
   const versions = []
   try {
     for (const run of runs) {
-      const browser = await run.type.launch()
-      versions.push(`${run.label} ${browser.version()}`)
-      const page = await browser.newPage()
+      // WebKit blocks OPFS in a throwaway context (benchmark.html), so it gets a profile.
+      const profile = run.label === 'webkit' ? await mkdtemp(join(tmpdir(), 'opfslogd-bench-')) : undefined
+      const launched = profile ? undefined : await run.type.launch()
+      const context = profile ? await run.type.launchPersistentContext(profile) : await launched.newContext()
+      versions.push(`${run.label} ${launched?.version() ?? run.type.name()}`)
+      const page = context.pages()[0] ?? (await context.newPage())
+      page.on('console', (m) => process.stderr.write(`  [${run.label}] ${m.text()}\n`))
+      page.on('pageerror', (e) => process.stderr.write(`  [${run.label}] page error: ${e.message}\n`))
       if (run.throttle) {
         const cdp = await page.context().newCDPSession(page)
         await cdp.send('Emulation.setCPUThrottlingRate', { rate: run.throttle })
@@ -51,7 +60,9 @@ if (serveOnly) {
         if (!table.has(key)) table.set(key, { note: row.note ?? '', values: {} })
         table.get(key).values[run.label] = row.medianUs
       }
-      await browser.close()
+      await context.close()
+      await launched?.close()
+      if (profile) await rm(profile, { recursive: true, force: true })
       process.stderr.write(`done: ${run.label}\n`)
     }
   } finally {

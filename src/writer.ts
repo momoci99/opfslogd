@@ -63,7 +63,7 @@ export class SegmentWriter {
     const at = seg.size
     try {
       const n = seg.handle.write(bytes, { at })
-      if (n !== bytes.length) throw new Error(`short write: ${n} of ${bytes.length} bytes`)
+      if (n !== bytes.length) throw shortWrite(n, bytes.length)
     } catch (e) {
       try {
         seg.handle.truncate(at)
@@ -100,7 +100,7 @@ export class SegmentWriter {
     try {
       handle.truncate(0)
       const n = handle.write(header, { at: 0 })
-      if (n !== header.length) throw new Error(`short write: ${n} of ${header.length} bytes`)
+      if (n !== header.length) throw shortWrite(n, header.length)
     } catch (e) {
       handle.close()
       await this.dirs.active.removeEntry(name).catch(() => {})
@@ -161,6 +161,15 @@ async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boo
   } catch {
     return false
   }
+}
+
+/**
+ * Browsers do not throw QuotaExceededError from a sync handle write when storage is full.
+ * Measured (docs/design/benchmark.html): Chromium writes part of the data and returns a bogus
+ * count; Firefox writes nothing and returns 0. A short write is therefore treated as quota.
+ */
+function shortWrite(written: number, expected: number): DOMException {
+  return new DOMException(`short write: ${written} of ${expected} bytes`, 'QuotaExceededError')
 }
 
 function failReason(e: unknown): WriteFailReason {

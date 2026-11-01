@@ -38,6 +38,7 @@
     "test:watch": "vitest",
     "check:bfcache": "node test/bfcache/run.mjs",
     "check:vite": "node test/vite-dev/run.mjs",
+    "check:storage": "node test/storage-check/run.mjs",
     "bench": "node bench/run.mjs",
     "bench:serve": "node bench/run.mjs --serve",
     "typecheck": "tsc --noEmit",
