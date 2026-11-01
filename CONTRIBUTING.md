@@ -24,6 +24,7 @@ pnpm install
 | `pnpm dev` | Build in watch mode |
 | `pnpm lint:pkg` | Validate `package.json` exports with publint |
 | `pnpm exec playwright install chromium firefox webkit` | Browsers for the browser tests (once) |
+| `pnpm playground` | Page to try the API by hand against `src/` (no build): log, flush, upload, export, OPFS files |
 | `pnpm bench` | Speed measurements in desktop engines (`node bench/run.mjs --only=firefox` for one) |
 | `pnpm build && pnpm check:storage` | Crash, quota, page-leave, and memory checks (not in CI) |
 | `pnpm build && pnpm check:vite` | The built package in a Vite app, dev and build (not in CI) |
@@ -37,6 +38,7 @@ test/browser/         # browser tests: real OPFS, workers, Web Locks in Chromium
 test/storage-check/   # crash, quota, page-leave, memory checks (pnpm check:storage)
 test/vite-dev/        # the package in a Vite app (pnpm check:vite)
 bench/                # speed measurements (pnpm bench)
+playground/           # page to try the API by hand (pnpm playground)
 docs/                 # maintainer docs (releasing, design decisions)
 tsdown.config.ts      # build config
 vitest.config.ts      # test config

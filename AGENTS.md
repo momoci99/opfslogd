@@ -18,6 +18,7 @@ Guide for AI coding agents working in this repo. Human contributors: see [CONTRI
 | `pnpm build` | tsdown → `dist/` (ESM + `.d.ts` + sourcemap) |
 | `pnpm lint:pkg` | publint check of `package.json` exports |
 | `pnpm exec playwright install chromium firefox webkit` | Browsers for the `browser` project (once) |
+| `pnpm playground` | Vite page at `/playground/` to try the API by hand against `src/` (no build) |
 | `pnpm bench` / `pnpm bench:serve` | Speed measurements in desktop engines / served on the LAN for phones |
 | `pnpm check:bfcache` / `pnpm check:vite` / `pnpm check:storage` | Manual browser checks (not in CI; `check:vite` and `check:storage` need `pnpm build` first); see `docs/design/benchmark.html` |
 
@@ -38,6 +39,7 @@ test/browser/        Vitest browser-mode tests (real OPFS, Workers, Web Locks)
 test/bfcache/        bfcache check script (headed Chromium)
 test/vite-dev/       check that the worker loads in a Vite app
 bench/               speed measurement page and runner
+playground/          page to try the API by hand (pnpm playground)
 docs/decisions.md    design decision records (Markdown)
 docs/design/         design documents (HTML, open in a browser; start at index.html)
 docs/RELEASING.md    release process (human-only)

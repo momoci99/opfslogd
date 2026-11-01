@@ -168,6 +168,19 @@ Current Chromium-based browsers, Firefox, and Safari on desktop: anything with O
 
 ## Development
 
+### Playground
+
+A page to try the API by hand, run from a clone of this repo:
+
+```sh
+pnpm install
+pnpm playground
+```
+
+It opens `http://localhost:5181/playground/`. The page loads the source in `src/` directly, so edits show up on reload with no build. It has buttons for `init()`, `close()`, the four log levels, bursts and steady streams of records, `setContext()`, `flush()`, `exportLogs()`, and a fake upload `send()` that can resolve, reject, or never settle. It shows records from `subscribe()`, errors from `onError`, and the segment files in OPFS. Open it in several tabs to see locks, retention, and upload across tabs. `pnpm playground --host` also serves it on the LAN, but phones block OPFS without https.
+
+### More
+
 See [CONTRIBUTING.md](CONTRIBUTING.md). Design documents start at [docs/design/index.html](docs/design/index.html); decisions are in [docs/decisions.md](docs/decisions.md).
 
 ## License

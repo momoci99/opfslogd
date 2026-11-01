@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opfslogd playground</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f4; --panel: #fff; --line: #d8d8d4; --muted: #6b6b66; --text: #1d1d1b;
+    --debug: #7a7a74; --info: #2457a6; --warn: #9a6400; --error: #b3261e; --ok: #1f7a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1e; --line: #383836; --muted: #9a9a94; --text: #e8e8e4;
+      --debug: #8f8f88; --info: #79a6ef; --warn: #e0a84a; --error: #f08a80; --ok: #6cc98a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  header { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin-bottom: 12px; }
+  header .status { font-family: ui-monospace, monospace; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-width: 0; }
+  section.wide { grid-column: 1 / -1; }
+  label { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  label > span { min-width: 120px; color: var(--muted); }
+  input[type=text], input[type=number], textarea, select {
+    font: 12px ui-monospace, monospace; padding: 3px 5px; border: 1px solid var(--line);
+    border-radius: 4px; background: var(--bg); color: var(--text); min-width: 0;
+  }
+  input[type=text], textarea { flex: 1; }
+  input[type=number] { width: 110px; }
+  textarea { width: 100%; height: 44px; resize: vertical; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  button { font: inherit; padding: 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.on { background: var(--info); color: #fff; border-color: var(--info); }
+  .note { color: var(--muted); font-size: 12px; margin: 4px 0; }
+  .log { font: 12px/1.4 ui-monospace, monospace; height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; background: var(--bg); white-space: pre-wrap; word-break: break-all; }
+  .log.short { height: 140px; }
+  .lv-debug { color: var(--debug); } .lv-info { color: var(--info); } .lv-warn { color: var(--warn); } .lv-error { color: var(--error); }
+  .ok { color: var(--ok); } .bad { color: var(--error); }
+  table { border-collapse: collapse; width: 100%; font: 12px ui-monospace, monospace; }
+  td, th { text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--line); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.file { cursor: pointer; } tr.file:hover { background: var(--bg); }
+  th.dir { color: var(--muted); padding-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>opfslogd playground</h1>
+  <span class="status" id="status">not started</span>
+  <span class="note">Open this page in more tabs to see locks, retention, and upload across tabs.</span>
+</header>
+
+<div class="grid">
+  <section>
+    <h2>init</h2>
+    <label><span>namespace</span><input type="text" id="ns"></label>
+    <label><span>context (JSON)</span><input type="text" id="context"></label>
+    <label><span>rotate maxAgeMs</span><input type="number" id="rotateAge"></label>
+    <label><span>retention maxBytes</span><input type="number" id="retBytes"></label>
+    <label><span>retention maxAgeMs</span><input type="number" id="retAge"></label>
+    <label><span>upload</span><input type="checkbox" id="upload"> <span class="note">set at init; mode below changes live</span></label>
+    <label><span>upload intervalMs</span><input type="number" id="upInterval"></label>
+    <label><span>upload timeoutMs</span><input type="number" id="upTimeout"></label>
+    <label><span>init on page load</span><input type="checkbox" id="autoInit"></label>
+    <div class="row">
+      <button id="init">init()</button>
+      <button id="close">close()</button>
+      <button id="reset">default options</button>
+    </div>
+    <p class="note">Options are kept in this browser. init() a second time while running is ignored (#029); close() first.</p>
+  </section>
+
+  <section>
+    <h2>log</h2>
+    <div class="row">
+      <select id="lv"><option>debug</option><option selected>info</option><option>warn</option><option>error</option></select>
+      <input type="text" id="msg" value="hello">
+      <button id="log">log</button>
+    </div>
+    <label><span>ctx (JSON)</span><input type="text" id="ctx" value='{"user":1}'></label>
+    <div class="row">
+      <button id="logErr">error with Error + cause</button>
+      <button id="logBig">info with 100 KB ctx</button>
+    </div>
+    <div class="row">
+      <input type="number" id="burstN" value="10000"> <button id="burst">log N at once</button>
+    </div>
+    <div class="row">
+      <input type="number" id="rate" value="1000"> <span>records/s</span> <button id="stream">start</button>
+    </div>
+    <div class="row">
+      <input type="text" id="setCtx" value='{"page":"home"}'> <button id="setContext">setContext()</button>
+    </div>
+    <div class="row">
+      <button id="flush">flush()</button> <span id="flushOut" class="note"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>upload (fake send)</h2>
+    <div class="row" id="upMode">
+      <button data-mode="ok" class="on">resolve</button>
+      <button data-mode="slow">resolve after 3s</button>
+      <button data-mode="fail">reject</button>
+      <button data-mode="hang">never settle</button>
+    </div>
+    <p class="note">Nothing leaves the browser. send() is called only while init() had upload on.</p>
+    <div class="log short" id="uploads"></div>
+  </section>
+
+  <section>
+    <h2>export</h2>
+    <label><span>from (ms ago)</span><input type="number" id="expFrom" placeholder="all"></label>
+    <div class="row">
+      <button id="export">exportLogs() and download</button>
+      <button id="exportView">exportLogs() and show</button>
+    </div>
+    <div class="note" id="expOut"></div>
+  </section>
+
+  <section class="wide">
+    <h2>subscribe() <span id="recCount"></span></h2>
+    <div class="row">
+      <label><input type="checkbox" id="showDebug" checked> debug</label>
+      <label><input type="checkbox" id="follow" checked> follow</label>
+      <button id="clearRecs">clear</button>
+    </div>
+    <div class="log" id="records"></div>
+  </section>
+
+  <section>
+    <h2>onError</h2>
+    <div class="log short" id="errors"></div>
+  </section>
+
+  <section>
+    <h2>OPFS files <span id="estimate" class="note"></span></h2>
+    <div class="row">
+      <button id="refresh">refresh</button>
+      <label><input type="checkbox" id="autoRefresh" checked> every 1s</label>
+      <button id="wipe">delete this namespace</button>
+    </div>
+    <table><tbody id="files"></tbody></table>
+  </section>
+
+  <section class="wide">
+    <h2>file content <span id="fileName" class="note"></span></h2>
+    <div class="log" id="fileBody"></div>
+  </section>
+</div>
+
+<script type="module" src="./main.ts"></script>
+</body>
+</html>

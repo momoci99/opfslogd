@@ -41,6 +41,7 @@
     "check:storage": "node test/storage-check/run.mjs",
     "bench": "node bench/run.mjs",
     "bench:serve": "node bench/run.mjs --serve",
+    "playground": "node playground/run.mjs",
     "typecheck": "tsc --noEmit",
     "lint:pkg": "publint",
     "prepublishOnly": "pnpm run typecheck && pnpm run test && pnpm run build"
