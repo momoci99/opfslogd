@@ -31,6 +31,11 @@ Releases are published manually from a local terminal for now.
    npm view opfslogd versions dist-tags --prefer-online
    ```
    npm may say "Your package is being processed". The new version can take a few minutes to appear, and a temporary `0.0.0-stage` entry may show up while it is processed.
+6. Create a GitHub Release from the tag, with notes on what changed and known limits:
+   ```sh
+   gh release create vX.Y.Z --title vX.Y.Z --notes-file notes.md
+   ```
+   Add `--prerelease` for `0.x` versions.
 
 ## Versioning
 

@@ -5,7 +5,9 @@ const NS = 'vite-check'
 
 async function run() {
   const errors = []
-  init({ namespace: NS, onError: (e) => errors.push(e.code) })
+  // ?workerUrl=... : the app copied worker.js itself and passes its URL (README, #081)
+  const workerUrl = new URLSearchParams(location.search).get('workerUrl') ?? undefined
+  init({ namespace: NS, workerUrl, onError: (e) => errors.push(e.code) })
   logger.info('hello from vite')
   const flushed = await flush(10_000)
   if (errors.length) return { ok: false, error: errors.join(',') }

@@ -1232,3 +1232,9 @@ if (isDev) logger.debug('scroll', { y })
 **Why:**
 - Copying the active segment in order needs no extra state and cannot see a half-written batch. Holding writes back for the whole merge (up to 50MB, #052) would delay acks and trip the overload limits (#019).
 - Treating unrecovered orphans as "not exported yet" keeps one rule for `active/`: only the owner reads its active file.
+
+## 081. worker.js is a standalone file (2026-11-01)
+
+**Decision:** The build runs twice (`tsdown.config.ts`): once for `index.js` with types, once for `worker.js` without. `worker.js` imports nothing, so an app can copy that one file and pass its URL as `workerUrl` (#009). `pnpm check:vite` has a case for it: a Vite app that serves only a copied `worker.js`.
+
+**Why:** With one build, `index.js` and `worker.js` shared a chunk with a hashed name (`names-<hash>.js`). Copying `worker.js` alone, as the README says, then failed with `worker-load-failed`, and the hash changes on every build, so the docs could not name the extra file. The duplicated code is about 1KB.

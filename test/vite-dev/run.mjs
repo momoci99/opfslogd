@@ -23,7 +23,7 @@ const repo = join(here, '..', '..')
 // A fresh app per case, with the package copied (not linked) into node_modules,
 // as an npm install would leave it. Vite pre-bundles only real dependencies.
 // 'fake': the step-6 stand-in package. 'real': the built opfslogd (package.json + dist/).
-async function makeApp(pkg) {
+async function makeApp(pkg, copyWorker) {
   const root = await mkdtemp(join(tmpdir(), 'opfslogd-vite-'))
   if (pkg === 'fake') {
     await cp(join(here, 'app'), root, { recursive: true })
@@ -34,6 +34,8 @@ async function makeApp(pkg) {
     await cp(join(repo, 'dist'), join(dest, 'dist'), { recursive: true })
     await cp(join(repo, 'package.json'), join(dest, 'package.json'))
   }
+  // Only worker.js, nothing next to it: it must work alone (#081).
+  if (copyWorker) await cp(join(repo, 'dist', 'worker.js'), join(root, 'public', 'copied', 'worker.js'))
   return root
 }
 
@@ -60,12 +62,13 @@ const cases = [
   { name: 'fake pkg: build + preview', pkg: 'fake', mode: 'build', config: {} },
   { name: 'opfslogd dist: dev, no config', pkg: 'real', mode: 'dev', config: {} },
   { name: 'opfslogd dist: build + preview', pkg: 'real', mode: 'build', config: {} },
+  { name: 'opfslogd dist: build, workerUrl to a copied worker.js', pkg: 'real', mode: 'build', config: {}, copyWorker: true },
 ]
 
 const browser = await chromium.launch()
 try {
   for (const c of cases) {
-    const root = await makeApp(c.pkg)
+    const root = await makeApp(c.pkg, c.copyWorker)
     const base = { root, configFile: false, logLevel: 'silent', ...c.config }
     let server
     try {
@@ -77,7 +80,7 @@ try {
         server = await vite.preview({ ...base, preview: { port: 0, host: '127.0.0.1' } })
       }
       const url = server.resolvedUrls.local[0]
-      const r = await openInBrowser(browser, url)
+      const r = await openInBrowser(browser, c.copyWorker ? `${url}?workerUrl=/copied/worker.js` : url)
       const where = r.location ? `worker at ${r.location.replace(url, '/').slice(0, 80)}` : ''
       console.log(`${c.name}\t${r.ok ? 'worker ok, OPFS ok' : `FAILED: ${r.error ?? `OPFS ${r.opfs}`}`}\t${where}`)
       for (const e of r.errors) console.log(`\t${e}`)
