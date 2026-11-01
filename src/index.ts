@@ -1,9 +1,9 @@
 // Public API (docs/design/api.html). Everything exported here is public.
 
-import { Core, type InitOptions } from './core'
+import { Core, type InitOptions, type Subscriber } from './core'
 import type { Level } from './record'
 
-export type { InitOptions } from './core'
+export type { InitOptions, LogRecord, Subscriber } from './core'
 export { OpfslogdError, type OpfslogdErrorCode } from './errors'
 export type { Level } from './record'
 
@@ -53,4 +53,14 @@ export function flush(timeoutMs?: number): Promise<boolean> {
 /** Writes what is queued, closes the current segment, and stops logging (#030). */
 export function close(): Promise<void> {
   return core.close()
+}
+
+/**
+ * Calls `fn` at each flush with the records written in it, in the exported shape, drop
+ * lines included. For debugging: in-app log panels, console output during development,
+ * tests. Use `upload` to send logs to a server. Returns a function that unsubscribes.
+ * (#023, #042, #043)
+ */
+export function subscribe(fn: Subscriber): () => void {
+  return core.subscribe(fn)
 }

@@ -41,6 +41,24 @@ export interface InitOptions {
   onError?: (err: OpfslogdError) => void
 }
 
+/**
+ * One record as subscribers receive it: the exported line's shape (#033, #042).
+ * Treat it as read-only.
+ */
+export interface LogRecord {
+  ts: number
+  lv: Level
+  msg: string
+  ctx?: Record<string, unknown>
+  err?: Record<string, unknown>
+  tab: string
+  seq: number
+  /** Global context; absent when empty (#071). */
+  context?: Record<string, unknown>
+}
+
+export type Subscriber = (records: LogRecord[]) => void
+
 type State = 'idle' | 'open' | 'closed'
 /** Why the logger is closed: only an app's close() warns on later log() calls (#030, #041, #062). */
 type ClosedBy = 'close' | 'failure' | 'not-browser'
@@ -68,6 +86,8 @@ export class Core {
   private contextJson = '{}'
 
   private worker: Worker | undefined
+  private tabId = ''
+  private readonly subscribers = new Set<Subscriber>()
   private ready = false
   private closing: Promise<void> | undefined
   private onWorkerClosed: (() => void) | undefined
@@ -180,7 +200,7 @@ export class Core {
     this.post({
       type: 'init',
       namespace,
-      tabId: newTabId(),
+      tabId: (this.tabId = newTabId()),
       context: this.contextJson,
       rotateMaxAgeMs: maxAgeMs,
       rotateMaxBytes: ROTATE_MAX_BYTES,
@@ -200,13 +220,13 @@ export class Core {
     const next = mergeContext(this.context, partial)
     const json = serializeContext(next)
     if (json === this.contextJson) return
+    // Records logged before the change carry the old context (#031): flush them first,
+    // so the file and subscribers (#042) both see the old one.
+    const running = this.state === 'open' && this.worker !== undefined
+    if (running) this.flushNow()
     this.context = next
     this.contextJson = json
-    if (this.state === 'open' && this.worker) {
-      // Records logged before the change carry the old context (#031).
-      this.flushNow()
-      this.post({ type: 'context', context: json })
-    }
+    if (running) this.post({ type: 'context', context: json })
   }
 
   flush(timeoutMs: number = DEFAULT_FLUSH_TIMEOUT_MS): Promise<boolean> {
@@ -305,6 +325,8 @@ export class Core {
     const batch = this.queue.take(Date.now())
     this.oldestQueued = undefined
     if (!batch) return
+    // After the batch is built, before it is sent (#023). No cost without subscribers.
+    if (this.subscribers.size > 0) this.deliver(batch.text, batch.seq0)
     this.lastFlushAt = performance.now()
     const buf = new Uint8Array(batch.text.length * 3) // UTF-8 upper bound
     const { written } = encoder.encodeInto(batch.text, buf)
@@ -323,6 +345,44 @@ export class Core {
     this.lastSentId = batch.id
     for (const w of this.waiters) if (w.target === undefined) w.target = batch.id
     if (this.watchdog === undefined) this.restartWatchdog()
+  }
+
+  /** Adds a subscriber; returns a function that removes it, safe to call twice (#043). */
+  subscribe(fn: Subscriber): () => void {
+    if (this.closedBy === 'not-browser' && this.state === 'closed') return () => {}
+    if (typeof fn !== 'function') return () => {}
+    // a wrapper, so the same function subscribed twice is called twice and removed once per off()
+    const entry: Subscriber = (records) => fn(records)
+    this.subscribers.add(entry)
+    return () => {
+      this.subscribers.delete(entry)
+    }
+  }
+
+  /** Parses the batch once and hands the same array to every subscriber (#042). */
+  private deliver(text: string, seq0: number): void {
+    let records: LogRecord[]
+    try {
+      const context = this.contextJson === '{}' ? undefined : (JSON.parse(this.contextJson) as Record<string, unknown>)
+      const lines = text.split('\n')
+      lines.pop() // the batch ends with a newline
+      records = lines.map((line, i) => {
+        const r = JSON.parse(line) as LogRecord
+        r.tab = this.tabId
+        r.seq = seq0 + i
+        if (context) r.context = context
+        return r
+      })
+    } catch {
+      return
+    }
+    for (const fn of [...this.subscribers]) {
+      try {
+        fn(records)
+      } catch {
+        // a throwing subscriber must not affect logging (#023)
+      }
+    }
   }
 
   private startFlushTimer(): void {
@@ -408,6 +468,8 @@ export class Core {
     // close() clears the context so a later init() starts clean (#032)
     this.context = {}
     this.contextJson = '{}'
+    // close() removes all subscribers (#043); a failed logger delivers nothing (#041)
+    this.subscribers.clear()
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibility)
       window.removeEventListener('pagehide', this.onPageHide)
