@@ -9,3 +9,6 @@ notes/
 
 # Vitest browser mode failure screenshots
 .vitest/
+
+# Apps built by pnpm check:bundlers
+test/bundler-check/.apps/

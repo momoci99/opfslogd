@@ -40,6 +40,7 @@
     "test:watch": "vitest",
     "check:bfcache": "node test/bfcache/run.mjs",
     "check:vite": "node test/vite-dev/run.mjs",
+    "check:bundlers": "node test/bundler-check/run.mjs",
     "check:storage": "node test/storage-check/run.mjs",
     "check:android": "node test/android-check/run.mjs",
     "bench": "node bench/run.mjs",
