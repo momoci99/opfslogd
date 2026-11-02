@@ -19,8 +19,8 @@ Guide for AI coding agents working in this repo. Human contributors: see [CONTRI
 | `pnpm lint:pkg` | publint check of `package.json` exports |
 | `pnpm exec playwright install chromium firefox webkit` | Browsers for the `browser` project (once) |
 | `pnpm playground` | Vite page at `/playground/` to try the API by hand against `src/` (no build) |
-| `pnpm bench` / `pnpm bench:serve` | Speed measurements in desktop engines / served on the LAN for phones |
-| `pnpm check:bfcache` / `pnpm check:vite` / `pnpm check:storage` | Manual browser checks (not in CI; `check:vite` and `check:storage` need `pnpm build` first); see `docs/design/benchmark.html` |
+| `pnpm bench` / `pnpm bench --android` / `pnpm bench:serve` | Speed measurements in desktop engines / on an Android phone over USB (adb) / served on the LAN to open by hand |
+| `pnpm check:bfcache` / `pnpm check:vite` / `pnpm check:storage` / `pnpm check:android` | Manual browser checks (not in CI; all but `check:bfcache` need `pnpm build` first; `check:android` needs a phone on USB); see `docs/design/benchmark.html` |
 
 **Before finishing any change, run:**
 
@@ -38,6 +38,7 @@ src/index.ts         public entry; everything exported here is public API
 test/browser/        Vitest browser-mode tests (real OPFS, Workers, Web Locks)
 test/bfcache/        bfcache check script (headed Chromium)
 test/vite-dev/       check that the worker loads in a Vite app
+test/android-check/  page-leave and app-kill checks on an Android phone (adb + CDP)
 bench/               speed measurement page and runner
 playground/          page to try the API by hand (pnpm playground)
 docs/decisions.md    design decision records (Markdown)

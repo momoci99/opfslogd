@@ -27,7 +27,7 @@
   <tr><td>5. 공개 API</td><td><span class="tag ok">완료</span></td><td><a href="api.html">api.html</a></td><td>#024 ~ #057</td></tr>
   <tr><td>6. 벤치마크 환경 (Vitest browser mode)</td><td><span class="tag ok">완료</span></td><td><a href="benchmark.html">benchmark.html</a></td><td>#058 ~ #060</td></tr>
   <tr><td>7. 설계 점검과 보완</td><td><span class="tag ok">완료</span></td><td><a href="#review">이 페이지</a> (각 문서에 반영)</td><td>#061 ~ #069</td></tr>
-  <tr><td>8. 구현</td><td><span class="tag ok">완료</span> (실기기 측정 남음)</td><td><a href="#impl">이 페이지</a>, <a href="benchmark.html#impl">benchmark.html</a>, <code>README.md</code></td><td>#070 ~ #080</td></tr>
+  <tr><td>8. 구현</td><td><span class="tag ok">완료</span> (Android 실기기 1대 확인, iOS·저사양 기기 남음)</td><td><a href="#impl">이 페이지</a>, <a href="benchmark.html#impl">benchmark.html</a>, <code>README.md</code></td><td>#070 ~ #080</td></tr>
 </table>
 </div>
 
@@ -97,7 +97,8 @@
 <ul>
   <li><strong>측정으로 바뀐 것:</strong> flush 주기 200ms → 50ms(#077). 용량이 차도 브라우저가 <code>QuotaExceededError</code>를 던지지 않아서, 적게 쓰인 쓰기를 quota로 처리합니다(#064 메모).</li>
   <li><strong>측정으로 확인한 것:</strong> 강제 종료에도 ack 받은 쓰기가 남음(#074), 페이지 이동 때 잃는 기록 없음(#020), 4M자 상한과 80% 문턱 유지(#019), 내보낸 파일은 세그먼트의 약 1.4배(#066 메모).</li>
-  <li><strong>남은 것:</strong> 실기기 확인(<a href="benchmark.html#manual">benchmark.html</a>), Vite 외 번들러 확인.</li>
+  <li><strong>Android 실기기 (2026-11-02):</strong> Galaxy S25 Ultra의 Chrome과 Samsung Internet에서 동작, 속도, 페이지를 떠나거나 앱이 죽을 때 잃는 레코드를 쟀습니다(<a href="benchmark.html#android">benchmark.html</a>, #083).</li>
+  <li><strong>남은 것:</strong> iOS와 저사양 Android 실기기 확인(<a href="benchmark.html#manual">benchmark.html</a>), Vite 외 번들러 확인.</li>
 </ul>
 
 <h2 id="impl-later">8단계(구현)에서 정할 것</h2>

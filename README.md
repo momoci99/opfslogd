@@ -185,7 +185,7 @@ OPFS and Web Locks are per origin. If two apps share an origin (`user.github.io/
 
 Current Chromium-based browsers, Firefox, and Safari on desktop: anything with OPFS `createSyncAccessHandle()` in workers, `FileSystemFileHandle.move()`, and Web Locks. Tests run in Chromium, Firefox, and WebKit. Safari private browsing may not allow OPFS; the logger then reports `opfs-unavailable` and does nothing.
 
-**Mobile browsers are not verified yet.** Chrome on Android and Safari on iOS have the APIs above, but the library has not been tested or measured on real phones. Storage limits, background tab handling, and speed may differ. Real-device checks are planned before 1.0.
+**Mobile browsers are partly verified.** On one high-end Android phone (Galaxy S25 Ultra, Android 17), Chrome and Samsung Internet pass the checks: going to the background or turning the screen off writes what was logged, and killing the app loses at most the last ~60ms of records ([measurements](docs/design/benchmark.html#android)). Work in the worker (upload, export) is 2–3 times slower than on desktop. iOS Safari and low-end Android phones are not verified yet; storage limits and speed may differ there. Those checks are planned before 1.0.
 
 ## Development
 
@@ -397,7 +397,7 @@ OPFS와 Web Locks는 origin 단위입니다. 두 앱이 origin을 같이 쓰고(
 
 데스크톱의 최신 Chromium 계열, Firefox, Safari: Worker에서 OPFS `createSyncAccessHandle()`, `FileSystemFileHandle.move()`, Web Locks를 지원하는 브라우저. 테스트는 Chromium, Firefox, WebKit에서 돌립니다. Safari 개인 정보 보호 브라우징에서는 OPFS가 막힐 수 있고, 이때 로거는 `opfs-unavailable`을 알리고 아무것도 하지 않습니다.
 
-**모바일 브라우저는 아직 검증하지 않았습니다.** Android Chrome과 iOS Safari에도 위 API가 있지만, 실제 휴대폰에서 테스트하거나 측정하지 않았습니다. 저장 공간 제한, 백그라운드 탭 처리, 속도가 다를 수 있습니다. 실기기 확인은 1.0 전에 할 예정입니다.
+**모바일 브라우저는 일부만 검증했습니다.** 고사양 Android 휴대폰 한 대(Galaxy S25 Ultra, Android 17)에서 Chrome과 Samsung Internet이 확인을 통과했습니다. 백그라운드로 가거나 화면이 꺼지면 그때까지의 기록을 쓰고, 앱이 죽으면 많아야 마지막 약 60ms의 레코드를 잃습니다([측정](docs/design/benchmark.html#android)). Worker 안 작업(업로드, export)은 데스크톱보다 2~3배 느립니다. iOS Safari와 저사양 Android는 아직 검증하지 않았고, 저장 공간 제한과 속도가 다를 수 있습니다. 이 확인은 1.0 전에 할 예정입니다.
 
 ## 개발
 
