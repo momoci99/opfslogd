@@ -43,7 +43,7 @@ test/android-check/  page-leave and app-kill checks on an Android phone (adb + C
 bench/               speed measurement page and runner
 playground/          page to try the API by hand (pnpm playground)
 docs/decisions.md    design decision records (Markdown)
-docs/design/         design documents (HTML, open in a browser; start at index.html)
+docs/design/         design documents (HTML; start at index.html); published from main at https://momoci99.github.io/opfslogd/design/
 docs/RELEASING.md    release process (human-only)
 tsdown.config.ts     build entries and options
 vitest.config.ts     test environment

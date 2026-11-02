@@ -86,6 +86,10 @@ When the size limit is hit, `done` segments are deleted first, then the oldest `
 
 **Why:** Diagrams, state flows, and tables read much better as HTML. Decision records are short, append-only, and need clean diffs and GitHub rendering, so Markdown fits them better. Keeping one format per document avoids drift.
 
+> **Note (2026-11-02):** GitHub shows HTML files as source, so `docs/` is published with GitHub Pages from `main` (https://momoci99.github.io/opfslogd/design/), and README links there. `docs/.nojekyll` makes Pages serve the files as they are.
+>
+> **메모 (2026-11-02):** GitHub는 HTML 파일을 소스로 보여주므로, `docs/`를 `main`에서 GitHub Pages로 공개합니다(https://momoci99.github.io/opfslogd/design/). README는 그 주소로 연결합니다. `docs/.nojekyll`은 Pages가 파일을 그대로 내보내게 합니다.
+
 ## 009. Ship the worker as a separate file, with a `workerUrl` override; no inline build for now (2026-10-29)
 
 **Decision:** The worker ships as its own file (`dist/worker.js`) and is loaded with:
