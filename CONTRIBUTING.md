@@ -29,6 +29,7 @@ pnpm install
 | `pnpm build && pnpm check:storage` | Crash, quota, page-leave, and memory checks (not in CI) |
 | `pnpm build && pnpm check:android` | Records lost on page leave and app kill on an Android phone over USB (not in CI; needs adb) |
 | `pnpm build && pnpm check:vite` | The built package in a Vite app, dev and build (not in CI) |
+| `pnpm build && pnpm check:bundlers` | The built package in webpack, Next.js, Parcel, Rollup, and esbuild apps (not in CI; installs the bundlers into `test/bundler-check/` on the first run, about 470MB) |
 | `pnpm check:bfcache` | bfcache check in headed Chromium (not in CI) |
 
 ## Project layout
@@ -39,6 +40,7 @@ test/browser/         # browser tests: real OPFS, workers, Web Locks in Chromium
 test/storage-check/   # crash, quota, page-leave, memory checks (pnpm check:storage)
 test/android-check/   # page-leave and app-kill checks on an Android phone (pnpm check:android)
 test/vite-dev/        # the package in a Vite app (pnpm check:vite)
+test/bundler-check/   # the package in other bundlers' apps; own package.json (pnpm check:bundlers)
 bench/                # speed measurements (pnpm bench)
 playground/           # page to try the API by hand (pnpm playground)
 docs/                 # maintainer docs (releasing, design decisions)

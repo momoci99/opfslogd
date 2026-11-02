@@ -98,7 +98,8 @@
   <li><strong>측정으로 바뀐 것:</strong> flush 주기 200ms → 50ms(#077). 용량이 차도 브라우저가 <code>QuotaExceededError</code>를 던지지 않아서, 적게 쓰인 쓰기를 quota로 처리합니다(#064 메모).</li>
   <li><strong>측정으로 확인한 것:</strong> 강제 종료에도 ack 받은 쓰기가 남음(#074), 페이지 이동 때 잃는 기록 없음(#020), 4M자 상한과 80% 문턱 유지(#019), 내보낸 파일은 세그먼트의 약 1.4배(#066 메모).</li>
   <li><strong>Android 실기기 (2026-11-02):</strong> Galaxy S25 Ultra의 Chrome과 Samsung Internet에서 동작, 속도, 페이지를 떠나거나 앱이 죽을 때 잃는 레코드를 쟀습니다(<a href="benchmark.html#android">benchmark.html</a>, #083).</li>
-  <li><strong>남은 것:</strong> iOS와 저사양 Android 실기기 확인(<a href="benchmark.html#manual">benchmark.html</a>), Vite 외 번들러 확인.</li>
+  <li><strong>다른 번들러 (2026-11-02):</strong> webpack 5, Next.js 16(Turbopack, webpack), Parcel 2는 설정 없이 Worker를 띄우고, Rollup과 esbuild는 <code>workerUrl</code>이 필요합니다(<a href="benchmark.html#bundlers">benchmark.html</a>, #084). Parcel 때문에 <code>package.json</code>에 <code>main</code>과 <code>types</code>를 넣었습니다.</li>
+  <li><strong>남은 것:</strong> iOS와 저사양 Android 실기기 확인(<a href="benchmark.html#manual">benchmark.html</a>), 실제 앱 하나에 적용.</li>
 </ul>
 
 <h2 id="impl-later">8단계(구현)에서 정할 것</h2>
