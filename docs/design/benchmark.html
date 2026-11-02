@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>벤치마크와 브라우저 확인</h1>
-<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-01 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 (7단계에서 #064, #066 측정 항목 추가, 8단계에서 <a href="#impl-results">구현 단계 측정</a> 일부 완료) · 코드: <code>test/browser/</code>, <code>test/storage-check/</code>, <code>bench/</code>, <code>vitest.config.ts</code></p>
+<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-02 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 (7단계에서 #064, #066 측정 항목 추가, 8단계에서 <a href="#impl-results">구현 단계 측정</a> 일부 완료, 2026-11-02 <a href="#android">Android 실기기</a>) · 코드: <code>test/browser/</code>, <code>test/storage-check/</code>, <code>test/android-check/</code>, <code>bench/</code>, <code>vitest.config.ts</code></p>
 
 <p class="lead">설계가 기대는 브라우저 동작이 실제로 그런지 확인하고, 초안 숫자를 정할 속도를 잽니다. 각 문서의 "검증할 것" 항목의 결과는 이 문서에 모읍니다.</p>
 
@@ -22,6 +22,7 @@
     <li><a href="#api">브라우저 API 확인 결과</a></li>
     <li><a href="#speed">속도 측정</a></li>
     <li><a href="#impl">구현 단계로 넘긴 것</a></li>
+    <li><a href="#android">Android 실기기 측정</a></li>
     <li><a href="#manual">실기기에서 직접 확인할 것</a></li>
   </ol>
 </nav>
@@ -41,7 +42,9 @@ pnpm vitest run --project browser --reporter=verbose   # 브라우저 결과만,
 pnpm check:bfcache                                     # bfcache 확인 (Chromium 창이 열림)
 pnpm build &amp;&amp; pnpm check:vite                       # Vite 앱에서 Worker 경로 확인 (가짜 패키지 + 실제 dist)
 pnpm build &amp;&amp; pnpm check:storage                    # 강제 종료 뒤 남는 쓰기, quota 초과 때 쓰기 (8단계)
-node bench/run.mjs --only=firefox                      # bench를 한 엔진에서만</code></pre>
+node bench/run.mjs --only=firefox                      # bench를 한 엔진에서만
+pnpm bench --android                                   # Android 휴대폰 (USB, <a href="#android">6장</a>)
+pnpm build &amp;&amp; pnpm check:android                  # Android에서 페이지를 떠나거나 앱이 죽을 때 잃는 레코드</code></pre>
 <ul>
   <li><code>vitest.config.ts</code>는 프로젝트 둘로 나뉩니다. <code>unit</code>은 jsdom에서 <code>src/**/*.test.ts</code>를, <code>browser</code>는 실제 브라우저에서 <code>test/browser/**/*.test.ts</code>를 돌립니다.</li>
   <li>OPFS 작업은 테스트용 Worker(<code>test/browser/opfs.worker.ts</code>)가 합니다. 라이브러리처럼 Worker 안에서 sync access handle을 씁니다.</li>
@@ -107,7 +110,7 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
 </ul>
 
 <h2 id="speed">4. 속도 측정</h2>
-<p>코드: <code>bench/</code>. 실행: <code>pnpm bench</code>(데스크톱 엔진에서 페이지를 열어 결과를 모음), <code>pnpm bench:serve</code>(LAN에 페이지를 열어 휴대폰으로 접속). Vitest의 <code>bench</code>는 browser mode에서 동작하지 않아(<code>bench</code>가 export되지 않음) 측정 코드를 직접 작성했습니다. 각 값은 약 50ms짜리 측정을 15번 해서 얻은 중앙값입니다.</p>
+<p>코드: <code>bench/</code>. 실행: <code>pnpm bench</code>(데스크톱 엔진에서 페이지를 열어 결과를 모음), <code>pnpm bench:serve</code>(LAN에 페이지를 열어 휴대폰으로 접속. http라서 OPFS 쓰는 7, 8, 10번은 안 됨), <code>pnpm bench --android</code>(USB로 연결한 Android 휴대폰, <a href="#android">6장</a>). Vitest의 <code>bench</code>는 browser mode에서 동작하지 않아(<code>bench</code>가 export되지 않음) 측정 코드를 직접 작성했습니다. 각 값은 약 50ms짜리 측정을 15번 해서 얻은 중앙값입니다.</p>
 <p>측정 환경: Playwright 1.64.1 · Chromium 156 · Firefox 157 · WebKit 27.2 · macOS · 2026-11-01. "Chromium 4x"는 CPU를 4배 느리게 한 Chromium으로, 저사양 휴대폰을 흉내 낸 값일 뿐입니다.</p>
 <p>레코드 크기: 작은 것 50바이트(<code>msg</code>만), 중간 184바이트(<code>ctx</code>에 키 5개), 큰 것 838바이트(<code>ctx</code>에 객체 10개 배열).</p>
 
@@ -244,7 +247,7 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
   <li><strong>flush 고정 비용이 작습니다:</strong> 200ms 주기면 Chromium 4x에서 메인 스레드의 약 0.02%입니다. 1% 기준(#017)만 보면 Chromium 4x에서 약 5ms까지 줄일 수 있습니다. 주기는 50ms(약 0.1%)로 정했습니다(#077). 실제 저사양 휴대폰은 아직 재지 않았습니다(아래 참고).</li>
   <li><strong>4M자 상한과 80% 문턱 (#019):</strong> 문턱은 한 작업 안에서 약 1만 7천 건을 넘게 기록할 때만 닿습니다. 작업 사이에 ack가 처리되면 초당 10만 건도 버리지 않습니다. 상한과 문턱을 바꿀 근거가 없으므로 유지합니다.</li>
   <li><strong>GC (#015):</strong> 따로 재지 않았습니다. flush마다 버퍼를 새로 할당하는 비용은 6, 8번 측정에 들어 있고, 둘 다 작습니다.</li>
-  <li><strong>휴대폰에서 OPFS 측정은 <code>pnpm bench:serve</code>로 할 수 없습니다:</strong> LAN 주소의 http 페이지는 secure context가 아니어서 OPFS와 Worker 쓰기(7, 8번)가 동작하지 않습니다. Android는 USB 포트 포워딩(<code>localhost</code>)으로 열면 됩니다. iOS Safari는 https가 필요합니다.</li>
+  <li><strong>휴대폰에서 OPFS 측정은 <code>pnpm bench:serve</code>로 할 수 없습니다:</strong> LAN 주소의 http 페이지는 secure context가 아니어서 OPFS와 Worker 쓰기(7, 8번)가 동작하지 않습니다. Android는 USB 포트 포워딩(<code>localhost</code>)으로 열면 됩니다(<code>pnpm bench --android</code>, <a href="#android">6장</a>). iOS Safari는 https가 필요합니다.</li>
 </ul>
 
 <h3 id="impl-results-3">upload와 export (단위 8, 9 뒤)</h3>
@@ -280,11 +283,139 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
 
 <h3>아직 재지 않은 것</h3>
 <ul>
-  <li>실제 저사양 휴대폰에서 8번(flush 고정 비용, #077)과 10번(Worker 안 작업)</li>
+  <li>실제 저사양 휴대폰에서 8번(flush 고정 비용, #077)과 10번(Worker 안 작업). 고사양 Android는 <a href="#android">6장</a>에 있습니다</li>
   <li>탭 여러 개가 동시에 retention과 upload를 시도할 때: Lock 규칙(#022)은 테스트로 확인했고(<code>test/browser/retention.test.ts</code>, <code>upload.test.ts</code>), 실제 탭 여러 개의 장시간 동작은 실기기 목록에 둡니다.</li>
 </ul>
 
-<h2 id="manual">6. 실기기에서 직접 확인할 것</h2>
+<h2 id="android">6. Android real device / Android 실기기 측정</h2>
+
+<div lang="en">
+<p>Measured 2026-11-02 on one phone: Galaxy S25 Ultra (SM-S938N), Android 17, Chrome 156, Samsung Internet 30 (Chromium 143). This is a high-end phone; a low-end Android phone and iOS are still not measured. Code: <code>test/android-check/</code>, <code>bench/run.mjs --android</code>.</p>
+<h3>How it runs</h3>
+<pre><code>brew install --cask android-platform-tools          # adb, once (about 20MB)
+pnpm bench --android                                # bench page in Chrome and Samsung Internet
+pnpm build &amp;&amp; pnpm check:android                  # records lost when the page is left or killed
+pnpm build &amp;&amp; pnpm check:android --only=screen-off-kill   # unlock the phone when the screen comes back</code></pre>
+<ul>
+  <li>The phone needs Developer options → USB debugging, and the USB debugging prompt accepted. Samsung's Auto Blocker allows USB debugging for 30 minutes at a time; after that adb loses the phone and it has to be plugged in and allowed again.</li>
+  <li><code>adb reverse</code> lets the phone open the computer's server as <code>http://localhost</code>, which is a secure context. The LAN address that <code>pnpm bench:serve</code> prints is plain http, so OPFS does not work there.</li>
+  <li>Both browsers open a DevTools socket while USB debugging is on (<code>chrome_devtools_remote</code>, <code>Terrace_devtools_remote</code>). The scripts forward it and connect Playwright over CDP. Playwright's <code>_android.launchBrowser()</code> is not used: it hung until a Chrome flag is set by hand, and it does not cover Samsung Internet.</li>
+  <li>A browser in the background does not answer on its socket, so each page is opened with an intent, which brings the browser to the front.</li>
+  <li><strong>While DevTools is attached, the page stays visible after HOME</strong> and its timers keep full speed. Scenarios that hide or kill the page detach first, and the page reports its lifecycle events to the server.</li>
+  <li>The scripts keep the screen on while plugged in (<code>svc power stayon usb</code>) and put the setting back at the end. A screen that turns off hides the page.</li>
+</ul>
+
+<h3>APIs</h3>
+<p>In both browsers: secure context on <code>localhost</code>, OPFS with <code>createSyncAccessHandle()</code> in the worker, Web Locks, and the worker loading as a module. Everything in the bench page and the checks ran without errors.</p>
+
+<h3>Speed (range of 3 runs)</h3>
+<p>Desktop columns are from <a href="#impl">section 5</a> (macOS, 2026-11-01).</p>
+<div class="table-wrap">
+<table>
+  <tr><th>Measure</th><th>Desktop Chromium</th><th>Chromium 4x</th><th>Android Chrome</th><th>Android Samsung Internet</th></tr>
+  <tr><td><code>log()</code>, medium record</td><td>0.22 µs</td><td>1.0 µs</td><td>0.27 ~ 0.33 µs</td><td>0.27 ~ 0.35 µs</td></tr>
+  <tr><td><code>log()</code>, Error with cause and props</td><td>1.2 µs</td><td>5.1 µs</td><td>1.3 ~ 1.6 µs</td><td>1.4 ~ 1.8 µs</td></tr>
+  <tr><td><code>log()</code>, rejected</td><td>0.006 µs</td><td>0.026 µs</td><td>0.006 ~ 0.008 µs</td><td>0.007 ~ 0.009 µs</td></tr>
+  <tr><td>One flush on the main thread (1,425 lines, 257KB)</td><td>0.23 ms</td><td>0.87 ms</td><td>0.39 ~ 0.62 ms</td><td>0.43 ~ 0.54 ms</td></tr>
+  <tr><td>Worker write round trip, no <code>flush()</code></td><td>1.1 ms</td><td>1.0 ms</td><td>2.2 ~ 2.6 ms</td><td>2.3 ~ 2.9 ms</td></tr>
+  <tr><td>Worker write round trip, <code>flush()</code> every write</td><td>0.83 ms</td><td>1.0 ms</td><td>1.3 ~ 1.5 ms</td><td>2.4 ~ 2.9 ms</td></tr>
+  <tr><td>Fixed cost of one flush (send + ack)</td><td>13 µs</td><td>47 µs</td><td>18 ~ 20 µs</td><td>19 ~ 29 µs</td></tr>
+  <tr><td>Upload prepare, one 2MB segment (in worker)</td><td>22 ms</td><td>25 ms</td><td>58 ~ 63 ms</td><td>66 ~ 83 ms</td></tr>
+  <tr><td><code>exportLogs()</code>, 10MB (in worker)</td><td>135 ms</td><td>137 ms</td><td>235 ~ 285 ms</td><td>226 ~ 275 ms</td></tr>
+  <tr><td>Overload</td><td colspan="4">Same everywhere: 17,392 records accepted in one task, then dropped; 100k records over 100 tasks with none dropped (0.67 ~ 0.75 s on the phone)</td></tr>
+</table>
+</div>
+<p>A first run, made by opening the tab over CDP instead of an intent, had Android Chrome 2 ~ 3 times slower (<code>log()</code> 0.82 µs, worker write 3.6 ms). It did not repeat and is left out.</p>
+
+<h3>Records lost when the page is left or killed</h3>
+<p>The page logs 5,000 records/s (50 every 10ms), as in <code>check:storage</code> section 3. Before each batch it reports the count to the server with a synchronous request, so "lost" can read up to 50 high, never low. 3 runs each; screen off 1 run, with an earlier version of the script.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>Scenario</th><th>Android Chrome</th><th>Android Samsung Internet</th></tr>
+  <tr><td>Navigate to another page</td><td>0, 0, 0</td><td>0, 0, 0</td></tr>
+  <tr><td>Close the tab</td><td>50, 50, 50</td><td>100, 100, 100</td></tr>
+  <tr><td>Kill the app while the page is in front (<code>am force-stop</code>)</td><td>249, 99, 149</td><td>149, 149, 299</td></tr>
+  <tr><td>HOME, kill 5s later</td><td>49, 49, 49</td><td>49, 49, 49</td></tr>
+  <tr><td>HOME, kill 30s later</td><td>49, 49, 49</td><td>49, 49, 49</td></tr>
+  <tr><td>Screen off, kill 5s later</td><td>49</td><td>99</td></tr>
+</table>
+</div>
+<p>No partial lines and no gaps in any run: what reached disk was always every record from the first up to some point.</p>
+
+<h3>What this means</h3>
+<ul>
+  <li><strong>#014 and #077 hold on this phone:</strong> <code>log()</code> is well under 1 µs, and one flush costs 18 ~ 29 µs, about 0.06% of the main thread at the 50ms interval.</li>
+  <li><strong>Work in the worker is 2 ~ 3 times slower than on desktop.</strong> Chromium's 4x CPU throttling does not slow workers, so it did not show this. At this rate a 50MB export takes about 1.1 ~ 1.5 s in the worker; the main thread only waits.</li>
+  <li><strong>#074 holds:</strong> <code>flush()</code> on every write is not slower on the phone either, and is not needed: killing the app never left a partial line.</li>
+  <li><strong>#020 holds:</strong> HOME and screen off fire <code>visibilitychange: hidden</code>, and its flush writes everything logged so far. In the background, timers run once a second; <code>log()</code>'s own interval check (#020) flushes the previous batch when the next one starts, so a kill in the background loses only the batch since the last wake (49 records here). Killing the app in front loses what was not yet written: the records since the last flush plus a batch on its way to the worker, at most 299 here, about 60ms at this rate. Closing the tab loses one or two 10ms batches, like desktop Chromium (0 ~ 50).</li>
+  <li>Samsung Internet fires <code>freeze</code> right after <code>pagehide</code> when navigating away (bfcache); Chrome reported none.</li>
+</ul>
+</div>
+
+<div lang="ko">
+<p>2026-11-02, 휴대폰 한 대에서 쟀습니다: Galaxy S25 Ultra(SM-S938N), Android 17, Chrome 156, Samsung Internet 30(Chromium 143). 고사양 기기이고, 저사양 Android와 iOS는 아직 재지 않았습니다. 코드: <code>test/android-check/</code>, <code>bench/run.mjs --android</code>.</p>
+<h3>실행 방법</h3>
+<pre><code>brew install --cask android-platform-tools          # adb, 처음 한 번 (약 20MB)
+pnpm bench --android                                # Chrome과 Samsung Internet에서 bench 페이지
+pnpm build &amp;&amp; pnpm check:android                  # 페이지를 떠나거나 앱이 죽을 때 잃는 레코드
+pnpm build &amp;&amp; pnpm check:android --only=screen-off-kill   # 화면이 다시 켜지면 잠금을 풀어야 함</code></pre>
+<ul>
+  <li>휴대폰에서 개발자 옵션 → USB 디버깅을 켜고, USB 디버깅 허용 창을 승인해야 합니다. Samsung의 자동 차단 기능은 USB 디버깅을 한 번에 30분만 허용합니다. 그 뒤에는 adb가 휴대폰을 잃으므로 다시 꽂고 허용해야 합니다.</li>
+  <li><code>adb reverse</code>로 휴대폰이 컴퓨터의 서버를 <code>http://localhost</code>로 엽니다. secure context입니다. <code>pnpm bench:serve</code>가 보여주는 LAN 주소는 그냥 http라서 OPFS가 동작하지 않습니다.</li>
+  <li>두 브라우저 모두 USB 디버깅이 켜져 있으면 DevTools 소켓을 엽니다(<code>chrome_devtools_remote</code>, <code>Terrace_devtools_remote</code>). 스크립트가 이 소켓을 포워딩하고 Playwright를 CDP로 연결합니다. Playwright의 <code>_android.launchBrowser()</code>는 쓰지 않습니다. Chrome 플래그를 손으로 켜기 전에는 멈췄고, Samsung Internet은 다루지 못합니다.</li>
+  <li>백그라운드의 브라우저는 소켓에 응답하지 않습니다. 그래서 페이지는 intent로 열어 브라우저를 앞으로 가져옵니다.</li>
+  <li><strong>DevTools가 붙어 있으면 홈으로 가도 페이지가 visible로 남고</strong> 타이머도 제 속도로 돕니다. 페이지를 숨기거나 죽이는 시나리오는 먼저 연결을 끊고, 페이지가 생명주기 이벤트를 서버로 보냅니다.</li>
+  <li>스크립트는 연결된 동안 화면을 켜 두고(<code>svc power stayon usb</code>), 끝나면 설정을 되돌립니다. 화면이 꺼지면 페이지가 숨겨집니다.</li>
+</ul>
+
+<h3>API</h3>
+<p>두 브라우저 모두: <code>localhost</code>에서 secure context, Worker 안 OPFS <code>createSyncAccessHandle()</code>, Web Locks, module Worker 로딩. bench 페이지와 확인 스크립트 전부 오류 없이 돌았습니다.</p>
+
+<h3>속도 (3번 실행의 범위)</h3>
+<p>데스크톱 열은 <a href="#impl">5장</a>의 값입니다(macOS, 2026-11-01).</p>
+<div class="table-wrap">
+<table>
+  <tr><th>측정</th><th>데스크톱 Chromium</th><th>Chromium 4x</th><th>Android Chrome</th><th>Android Samsung Internet</th></tr>
+  <tr><td><code>log()</code>, 중간 레코드</td><td>0.22 µs</td><td>1.0 µs</td><td>0.27 ~ 0.33 µs</td><td>0.27 ~ 0.35 µs</td></tr>
+  <tr><td><code>log()</code>, Error + cause + 추가 속성</td><td>1.2 µs</td><td>5.1 µs</td><td>1.3 ~ 1.6 µs</td><td>1.4 ~ 1.8 µs</td></tr>
+  <tr><td><code>log()</code>, 거절</td><td>0.006 µs</td><td>0.026 µs</td><td>0.006 ~ 0.008 µs</td><td>0.007 ~ 0.009 µs</td></tr>
+  <tr><td>flush 한 번의 메인 스레드 비용 (1,425줄, 257KB)</td><td>0.23 ms</td><td>0.87 ms</td><td>0.39 ~ 0.62 ms</td><td>0.43 ~ 0.54 ms</td></tr>
+  <tr><td>Worker 쓰기 왕복, <code>flush()</code> 없음</td><td>1.1 ms</td><td>1.0 ms</td><td>2.2 ~ 2.6 ms</td><td>2.3 ~ 2.9 ms</td></tr>
+  <tr><td>Worker 쓰기 왕복, 쓰기마다 <code>flush()</code></td><td>0.83 ms</td><td>1.0 ms</td><td>1.3 ~ 1.5 ms</td><td>2.4 ~ 2.9 ms</td></tr>
+  <tr><td>flush 한 번의 고정 비용 (보내기 + ack)</td><td>13 µs</td><td>47 µs</td><td>18 ~ 20 µs</td><td>19 ~ 29 µs</td></tr>
+  <tr><td>upload 준비, 2MB 세그먼트 하나 (Worker 안)</td><td>22 ms</td><td>25 ms</td><td>58 ~ 63 ms</td><td>66 ~ 83 ms</td></tr>
+  <tr><td><code>exportLogs()</code>, 10MB (Worker 안)</td><td>135 ms</td><td>137 ms</td><td>235 ~ 285 ms</td><td>226 ~ 275 ms</td></tr>
+  <tr><td>과부하</td><td colspan="4">모두 같음: 한 작업 안에서 17,392건까지 받고 나머지 버림. 10만 건을 작업 100개에 나누면 버린 것 없음 (휴대폰에서 0.67 ~ 0.75초)</td></tr>
+</table>
+</div>
+<p>intent 대신 CDP로 탭을 열었던 첫 실행에서는 Android Chrome이 2 ~ 3배 느렸습니다(<code>log()</code> 0.82 µs, Worker 쓰기 3.6 ms). 다시 나오지 않아 표에서 뺐습니다.</p>
+
+<h3>페이지를 떠나거나 앱이 죽을 때 잃은 레코드</h3>
+<p>페이지는 <code>check:storage</code> 3번처럼 초당 5,000건(10ms마다 50건)을 기록합니다. 묶음마다 기록하기 전에 동기 요청으로 개수를 서버에 보내므로, "잃은 수"는 최대 50까지 많게 나올 수 있고 적게 나오지는 않습니다. 각 3번, 화면 끄기는 1번(이전 버전 스크립트)입니다.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>상황</th><th>Android Chrome</th><th>Android Samsung Internet</th></tr>
+  <tr><td>다른 페이지로 이동</td><td>0, 0, 0</td><td>0, 0, 0</td></tr>
+  <tr><td>탭 닫기</td><td>50, 50, 50</td><td>100, 100, 100</td></tr>
+  <tr><td>페이지가 앞에 있을 때 앱 강제 종료 (<code>am force-stop</code>)</td><td>249, 99, 149</td><td>149, 149, 299</td></tr>
+  <tr><td>홈 버튼, 5초 뒤 종료</td><td>49, 49, 49</td><td>49, 49, 49</td></tr>
+  <tr><td>홈 버튼, 30초 뒤 종료</td><td>49, 49, 49</td><td>49, 49, 49</td></tr>
+  <tr><td>화면 끄기, 5초 뒤 종료</td><td>49</td><td>99</td></tr>
+</table>
+</div>
+<p>잘린 줄과 중간에 빠진 레코드는 한 번도 없었습니다. 디스크에는 항상 첫 레코드부터 어느 지점까지가 빠짐없이 남았습니다.</p>
+
+<h3>해석</h3>
+<ul>
+  <li><strong>이 기기에서 #014와 #077 유지:</strong> <code>log()</code>는 1 µs보다 훨씬 작고, flush 한 번의 고정 비용은 18 ~ 29 µs로 50ms 주기에서 메인 스레드의 약 0.06%입니다.</li>
+  <li><strong>Worker 안 작업은 데스크톱보다 2 ~ 3배 느립니다.</strong> Chromium 4x CPU throttling은 Worker를 느리게 하지 않아서 이 차이를 보여주지 못했습니다. 이 비율이면 50MB export가 Worker에서 약 1.1 ~ 1.5초 걸립니다. 메인 스레드는 기다리기만 합니다.</li>
+  <li><strong>#074 유지:</strong> 휴대폰에서도 쓰기마다 <code>flush()</code>가 더 느리지 않고, 필요하지도 않습니다. 앱을 죽여도 잘린 줄이 남지 않았습니다.</li>
+  <li><strong>#020 유지:</strong> 홈 버튼과 화면 끄기에 <code>visibilitychange: hidden</code>이 오고, 그때의 flush가 그때까지의 기록을 모두 씁니다. 백그라운드에서는 타이머가 1초에 한 번 돕니다. <code>log()</code>의 주기 검사(#020)가 다음 묶음이 시작될 때 앞 묶음을 flush하므로, 백그라운드에서 죽으면 마지막으로 깨어난 뒤의 묶음만 잃습니다(여기서는 49건). 앞에 있는 앱을 죽이면 아직 쓰지 못한 것을 잃습니다. 마지막 flush 뒤의 레코드와 Worker로 가는 중인 묶음으로, 여기서는 최대 299건, 이 속도로 약 60ms입니다. 탭을 닫으면 10ms 묶음 한두 개를 잃습니다. 데스크톱 Chromium(0 ~ 50)과 비슷합니다.</li>
+  <li>Samsung Internet은 다른 페이지로 이동할 때 <code>pagehide</code> 바로 뒤에 <code>freeze</code>를 보냅니다(bfcache). Chrome에서는 받지 못했습니다.</li>
+</ul>
+</div>
+
+<h2 id="manual">7. 실기기에서 직접 확인할 것</h2>
 <p>자동화가 어렵거나 실제 기기, 긴 시간이 필요한 항목입니다(#058).</p>
 <ul>
   <li>모바일 Safari의 OPFS quota와 eviction 동작</li>
@@ -294,9 +425,9 @@ node bench/run.mjs --only=firefox                      # bench를 한 엔진에�
   <li>Firefox와 Safari(데스크톱, iOS)에서 Worker가 sync handle을 연 페이지가 bfcache에 들어가는지, 돌아온 뒤 쓰기가 이어지는지 (#020). <code>test/bfcache/</code>의 페이지를 열고 직접 뒤로 가기를 하면 됩니다.</li>
   <li>Web Lock을 가진 탭이 freeze되는지, 브라우저별로 언제 되는지 (#022)</li>
   <li>느린 모바일 회선에서 2MB 세그먼트 업로드 시간 (#045, #066). 처음에는 8MB였음</li>
-  <li>휴대폰에서 <code>pnpm bench:serve</code> 페이지 결과 (특히 저사양 Android, iOS Safari)</li>
+  <li>휴대폰에서 bench 결과: 고사양 Android는 <a href="#android">6장</a>에서 완료. 저사양 Android와 iOS Safari가 남음</li>
   <li>장애 복구 직후 여러 클라이언트가 밀린 세그먼트를 한꺼번에 올릴 때의 부하 (#047)</li>
-  <li>저사양 휴대폰에서 flush 고정 비용(#077)과 Worker 안 작업(upload 준비, export). <code>bench:serve</code>의 http LAN 주소에서는 OPFS를 쓸 수 없으므로 Android USB 포트 포워딩(<code>localhost</code>)이나 https로 엽니다</li>
+  <li>저사양 휴대폰에서 flush 고정 비용(#077)과 Worker 안 작업(upload 준비, export). Android는 <code>pnpm bench --android</code>(<a href="#android">6장</a>), iOS Safari는 https가 필요합니다</li>
   <li>탭 여러 개를 오래 열어 둘 때 retention과 upload가 한 탭에서만 도는지, 닫힌 탭의 파일이 복구되는지</li>
 </ul>
 

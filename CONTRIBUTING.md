@@ -25,8 +25,9 @@ pnpm install
 | `pnpm lint:pkg` | Validate `package.json` exports with publint |
 | `pnpm exec playwright install chromium firefox webkit` | Browsers for the browser tests (once) |
 | `pnpm playground` | Page to try the API by hand against `src/` (no build): log, flush, upload, export, OPFS files |
-| `pnpm bench` | Speed measurements in desktop engines (`node bench/run.mjs --only=firefox` for one) |
+| `pnpm bench` | Speed measurements in desktop engines (`node bench/run.mjs --only=firefox` for one; `pnpm bench --android` for an Android phone over USB) |
 | `pnpm build && pnpm check:storage` | Crash, quota, page-leave, and memory checks (not in CI) |
+| `pnpm build && pnpm check:android` | Records lost on page leave and app kill on an Android phone over USB (not in CI; needs adb) |
 | `pnpm build && pnpm check:vite` | The built package in a Vite app, dev and build (not in CI) |
 | `pnpm check:bfcache` | bfcache check in headed Chromium (not in CI) |
 
@@ -36,6 +37,7 @@ pnpm install
 src/                  # library source; unit tests (jsdom) live next to code as *.test.ts
 test/browser/         # browser tests: real OPFS, workers, Web Locks in Chromium, Firefox, WebKit
 test/storage-check/   # crash, quota, page-leave, memory checks (pnpm check:storage)
+test/android-check/   # page-leave and app-kill checks on an Android phone (pnpm check:android)
 test/vite-dev/        # the package in a Vite app (pnpm check:vite)
 bench/                # speed measurements (pnpm bench)
 playground/           # page to try the API by hand (pnpm playground)

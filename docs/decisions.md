@@ -1248,3 +1248,13 @@ if (isDev) logger.debug('scroll', { y })
 **결정:** 앞으로 문서는 영어와 한국어를 함께 씁니다. 대상은 README, CONTRIBUTING, `docs/`, 이 파일의 새 항목, GitHub 릴리스 노트입니다. 영어를 먼저, 같은 내용의 한국어를 뒤에 둡니다. 코드, 코드 주석, 커밋 메시지, PR 제목은 영어로만 씁니다. 이 결정 전에 쓴 문서는 한 언어로만 되어 있을 수 있고, 다시 쓸 때 다른 언어를 더합니다.
 
 **이유:** 패키지가 npm에 공개되어 있으니 대부분의 독자를 위해 영어가 필요합니다. 메인테이너와 첫 사용자는 한국어를 읽고, 지금까지의 설계 논의도 한국어로 했습니다.
+
+## 083. Android phones are checked over adb and CDP (2026-11-02)
+
+**Decision:** Real Android phones are checked from the computer over USB. `adb reverse` lets the phone open the local server as `http://localhost`, a secure context, and Playwright connects over CDP to the DevTools socket that Chrome and Samsung Internet open while USB debugging is on. `pnpm bench --android` runs the bench page, and `pnpm check:android` counts records lost when the page is left or the app is killed. Scenarios that hide or kill the page detach DevTools first. The first results (Galaxy S25 Ultra, Chrome 156, Samsung Internet 30) keep #014, #020, #074, and #077 as they are, so the library does not change (`docs/design/benchmark.html#android`).
+
+**Why:** Playwright's `_android.launchBrowser()` hung until a Chrome flag is set by hand, and it does not cover Samsung Internet, which has a large share in Korea. The iOS Simulator needs Xcode (over 20GB) and still runs on the computer's CPU and memory. `pnpm bench:serve` on a LAN address is plain http, where OPFS does not work. While DevTools is attached, a page stays visible after HOME, so a check with it attached would not show background behavior. iOS and low-end Android are still to be checked.
+
+**결정:** Android 실기기는 컴퓨터에서 USB로 확인합니다. `adb reverse`로 휴대폰이 로컬 서버를 secure context인 `http://localhost`로 열고, Playwright가 CDP로 Chrome과 Samsung Internet의 DevTools 소켓(USB 디버깅이 켜져 있으면 열림)에 연결합니다. `pnpm bench --android`는 bench 페이지를 돌리고, `pnpm check:android`는 페이지를 떠나거나 앱이 죽을 때 잃는 레코드를 셉니다. 페이지를 숨기거나 죽이는 시나리오는 먼저 DevTools 연결을 끊습니다. 첫 결과(Galaxy S25 Ultra, Chrome 156, Samsung Internet 30)로는 #014, #020, #074, #077을 그대로 두므로 라이브러리는 바뀌지 않습니다(`docs/design/benchmark.html#android`).
+
+**이유:** Playwright의 `_android.launchBrowser()`는 Chrome 플래그를 손으로 켜기 전에는 멈췄고, 한국에서 점유율이 큰 Samsung Internet을 다루지 못합니다. iOS 시뮬레이터는 Xcode(20GB 이상)가 필요하고, 결국 컴퓨터의 CPU와 메모리에서 돕니다. LAN 주소의 `pnpm bench:serve`는 그냥 http라서 OPFS가 동작하지 않습니다. DevTools가 붙어 있으면 홈으로 가도 페이지가 visible로 남으므로, 붙인 채로 확인하면 백그라운드 동작이 보이지 않습니다. iOS와 저사양 Android는 아직 확인할 것으로 남습니다.
