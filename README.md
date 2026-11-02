@@ -173,7 +173,7 @@ OPFS and Web Locks are per origin. If two apps share an origin (`user.github.io/
 
 ## Things to know
 
-- **Bundlers.** The worker is a separate file, `worker.js`, loaded with `new Worker(new URL('./worker.js', import.meta.url))`. Vite handles this with no config (checked in dev and build). If your bundler does not, copy `worker.js` from the package and pass its URL as `workerUrl`.
+- **Bundlers.** The worker is a separate file, `worker.js`, loaded with `new Worker(new URL('./worker.js', import.meta.url))`. These handle it with no config: Vite 8 (dev, build), webpack 5 (build), Next.js 16 with Turbopack or webpack (dev, build), and Parcel 2 (build; needs a release after 0.1.0). Rollup and esbuild do not emit the file: copy `node_modules/opfslogd/dist/worker.js` to your static files, copy it again when you update opfslogd, and pass its URL, for example `init({ workerUrl: '/opfslogd-worker.js' })`.
 - **CSP.** The worker needs `worker-src 'self'` (or the origin you serve it from). No `blob:` or `data:` URLs are used.
 - **Server-side rendering.** Outside a browser page (Node, SSR), every function does nothing.
 - **Logout or consent withdrawn.** Call `close()`. It stops logging; later records are discarded, not queued.
@@ -385,7 +385,7 @@ OPFS와 Web Locks는 origin 단위입니다. 두 앱이 origin을 같이 쓰고(
 
 ## 알아 둘 것
 
-- **번들러.** Worker는 별도 파일 `worker.js`이고 `new Worker(new URL('./worker.js', import.meta.url))`로 불러옵니다. Vite는 설정 없이 됩니다(dev와 build 확인). 번들러가 처리하지 못하면 패키지의 `worker.js`를 복사하고 그 URL을 `workerUrl`로 넘기세요.
+- **번들러.** Worker는 별도 파일 `worker.js`이고 `new Worker(new URL('./worker.js', import.meta.url))`로 불러옵니다. 설정 없이 되는 번들러: Vite 8(dev, build), webpack 5(build), Next.js 16의 Turbopack과 webpack(dev, build), Parcel 2(build, 0.1.0 다음 릴리스부터). Rollup과 esbuild는 이 파일을 내보내지 않습니다. `node_modules/opfslogd/dist/worker.js`를 정적 파일로 복사하고(opfslogd를 업데이트하면 다시 복사), 그 URL을 넘기세요. 예: `init({ workerUrl: '/opfslogd-worker.js' })`.
 - **CSP.** Worker에는 `worker-src 'self'`(또는 Worker를 내려주는 origin)가 필요합니다. `blob:`이나 `data:` URL은 쓰지 않습니다.
 - **서버 사이드 렌더링.** 브라우저 페이지가 아니면(Node, SSR) 모든 함수가 아무것도 하지 않습니다.
 - **로그아웃이나 동의 철회.** `close()`를 호출하세요. 기록이 멈추고, 이후 기록은 큐에 쌓이지 않고 버려집니다.

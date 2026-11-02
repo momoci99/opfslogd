@@ -11,7 +11,7 @@
 <p class="meta"><a href="index.html">← 설계 현황</a></p>
 
 <h1>벤치마크와 브라우저 확인</h1>
-<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-02 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 (7단계에서 #064, #066 측정 항목 추가, 8단계에서 <a href="#impl-results">구현 단계 측정</a> 일부 완료, 2026-11-02 <a href="#android">Android 실기기</a>) · 코드: <code>test/browser/</code>, <code>test/storage-check/</code>, <code>test/android-check/</code>, <code>bench/</code>, <code>vitest.config.ts</code></p>
+<p class="meta">상태: 6단계 완료 · 최종 수정 2026-11-02 · 관련 결정: <code>docs/decisions.md</code> #058 ~ #060 (7단계에서 #064, #066 측정 항목 추가, 8단계에서 <a href="#impl-results">구현 단계 측정</a> 일부 완료, 2026-11-02 <a href="#android">Android 실기기</a>와 <a href="#bundlers">다른 번들러</a>) · 코드: <code>test/browser/</code>, <code>test/storage-check/</code>, <code>test/android-check/</code>, <code>test/bundler-check/</code>, <code>bench/</code>, <code>vitest.config.ts</code></p>
 
 <p class="lead">설계가 기대는 브라우저 동작이 실제로 그런지 확인하고, 초안 숫자를 정할 속도를 잽니다. 각 문서의 "검증할 것" 항목의 결과는 이 문서에 모읍니다.</p>
 
@@ -23,6 +23,7 @@
     <li><a href="#speed">속도 측정</a></li>
     <li><a href="#impl">구현 단계로 넘긴 것</a></li>
     <li><a href="#android">Android 실기기 측정</a></li>
+    <li><a href="#bundlers">다른 번들러</a></li>
     <li><a href="#manual">실기기에서 직접 확인할 것</a></li>
   </ol>
 </nav>
@@ -44,7 +45,8 @@ pnpm build &amp;&amp; pnpm check:vite                       # Vite 앱에서 Wor
 pnpm build &amp;&amp; pnpm check:storage                    # 강제 종료 뒤 남는 쓰기, quota 초과 때 쓰기 (8단계)
 node bench/run.mjs --only=firefox                      # bench를 한 엔진에서만
 pnpm bench --android                                   # Android 휴대폰 (USB, <a href="#android">6장</a>)
-pnpm build &amp;&amp; pnpm check:android                  # Android에서 페이지를 떠나거나 앱이 죽을 때 잃는 레코드</code></pre>
+pnpm build &amp;&amp; pnpm check:android                  # Android에서 페이지를 떠나거나 앱이 죽을 때 잃는 레코드
+pnpm build &amp;&amp; pnpm check:bundlers                 # webpack, Next.js, Parcel, Rollup, esbuild 앱에서 Worker 로딩 (<a href="#bundlers">7장</a>)</code></pre>
 <ul>
   <li><code>vitest.config.ts</code>는 프로젝트 둘로 나뉩니다. <code>unit</code>은 jsdom에서 <code>src/**/*.test.ts</code>를, <code>browser</code>는 실제 브라우저에서 <code>test/browser/**/*.test.ts</code>를 돌립니다.</li>
   <li>OPFS 작업은 테스트용 Worker(<code>test/browser/opfs.worker.ts</code>)가 합니다. 라이브러리처럼 Worker 안에서 sync access handle을 씁니다.</li>
@@ -415,7 +417,55 @@ pnpm build &amp;&amp; pnpm check:android --only=screen-off-kill   # 화면이 �
 </ul>
 </div>
 
-<h2 id="manual">7. 실기기에서 직접 확인할 것</h2>
+<h2 id="bundlers">7. Other bundlers / 다른 번들러</h2>
+
+<div lang="en">
+<p>Checked 2026-11-02 in Chromium: does the built package start its worker and write to OPFS in an app made with each bundler? The package is copied into the app's <code>node_modules</code>, as an install from npm would leave it. Vite is in <a href="#api">section 3</a>. Code: <code>test/bundler-check/</code>. The bundlers are in that folder's own <code>package.json</code>, not the root devDependencies (#084); the first run installs them (about 470MB).</p>
+<pre><code>pnpm build &amp;&amp; pnpm check:bundlers               # all cases
+pnpm build &amp;&amp; pnpm check:bundlers --only=next   # cases whose name starts with "next"</code></pre>
+<div class="table-wrap">
+<table>
+  <tr><th>Bundler</th><th>Result</th><th>Worker loaded from</th></tr>
+  <tr><td>webpack 5.112 (production build)</td><td>Works, no config</td><td>a chunk webpack emits (<code>opfslogd.js</code>)</td></tr>
+  <tr><td>Next.js 16.4, Turbopack: <code>next build</code> (static export) and <code>next dev</code></td><td>Works, no config</td><td>a Turbopack worker chunk under <code>/_next/static/chunks/</code></td></tr>
+  <tr><td>Next.js 16.4, webpack: <code>next build --webpack</code> and <code>next dev --webpack</code></td><td>Works, no config</td><td><code>/_next/static/chunks/opfslogd.*.js</code></td></tr>
+  <tr><td>Parcel 2.16 (build)</td><td>Works, no config, once <code>package.json</code> has <code>main</code> (#084). Before that, <code>import 'opfslogd'</code> itself failed: Parcel does not read <code>exports</code> by default</td><td><code>worker.[hash].js</code> that Parcel emits</td></tr>
+  <tr><td>Rollup 4.67 (with <code>@rollup/plugin-node-resolve</code>)</td><td>The worker fails to load (<code>worker-load-failed</code>): Rollup does not emit <code>worker.js</code>, so the URL is a 404. Works with <code>workerUrl</code> pointing at a copied <code>worker.js</code></td><td>the copied file</td></tr>
+  <tr><td>esbuild 0.28 (bundle, ESM)</td><td>Same as Rollup</td><td>the copied file</td></tr>
+</table>
+</div>
+<ul>
+  <li>This matches #009: bundlers that understand <code>new URL('./worker.js', import.meta.url)</code> emit the worker; Rollup and esbuild need <code>workerUrl</code>. The copied <code>worker.js</code> works alone (#081).</li>
+  <li>The Next.js page imports <code>opfslogd</code> at the top of a client component, so the server render loads the module too. That causes no error; <code>init()</code> runs in the browser after hydration.</li>
+  <li>With <code>moduleResolution: "node"</code>, TypeScript 5.9 did not find the types (<code>TS2307</code>) until <code>package.json</code> had <code>types</code> (#084).</li>
+  <li>Not checked: Rspack, webpack's dev server, Parcel's dev server, and Firefox and Safari with these bundlers (the worker URL is the bundler's work, not the browser's).</li>
+</ul>
+</div>
+
+<div lang="ko">
+<p>2026-11-02, Chromium에서 확인했습니다. 번들러마다 만든 앱에서 빌드한 패키지가 Worker를 띄우고 OPFS에 쓰는지 봅니다. 패키지는 npm 설치처럼 앱의 <code>node_modules</code>에 복사합니다. Vite는 <a href="#api">3장</a>에 있습니다. 코드: <code>test/bundler-check/</code>. 번들러는 루트 devDependencies가 아니라 이 폴더의 <code>package.json</code>에 있고(#084), 처음 실행할 때 설치됩니다(약 470MB).</p>
+<pre><code>pnpm build &amp;&amp; pnpm check:bundlers               # 전체
+pnpm build &amp;&amp; pnpm check:bundlers --only=next   # 이름이 "next"로 시작하는 경우만</code></pre>
+<div class="table-wrap">
+<table>
+  <tr><th>번들러</th><th>결과</th><th>Worker를 불러온 곳</th></tr>
+  <tr><td>webpack 5.112 (production 빌드)</td><td>설정 없이 됨</td><td>webpack이 만든 청크(<code>opfslogd.js</code>)</td></tr>
+  <tr><td>Next.js 16.4, Turbopack: <code>next build</code>(정적 export)와 <code>next dev</code></td><td>설정 없이 됨</td><td><code>/_next/static/chunks/</code> 아래의 Turbopack Worker 청크</td></tr>
+  <tr><td>Next.js 16.4, webpack: <code>next build --webpack</code>와 <code>next dev --webpack</code></td><td>설정 없이 됨</td><td><code>/_next/static/chunks/opfslogd.*.js</code></td></tr>
+  <tr><td>Parcel 2.16 (빌드)</td><td><code>package.json</code>에 <code>main</code>을 넣은 뒤로 설정 없이 됨(#084). 그 전에는 <code>import 'opfslogd'</code> 자체가 실패했습니다. Parcel은 기본으로 <code>exports</code>를 읽지 않습니다</td><td>Parcel이 만든 <code>worker.[hash].js</code></td></tr>
+  <tr><td>Rollup 4.67 (<code>@rollup/plugin-node-resolve</code> 사용)</td><td>Worker 로드 실패(<code>worker-load-failed</code>). Rollup이 <code>worker.js</code>를 내보내지 않아 URL이 404입니다. 복사한 <code>worker.js</code>를 <code>workerUrl</code>로 넘기면 됨</td><td>복사한 파일</td></tr>
+  <tr><td>esbuild 0.28 (bundle, ESM)</td><td>Rollup과 같음</td><td>복사한 파일</td></tr>
+</table>
+</div>
+<ul>
+  <li>#009의 예상과 같습니다. <code>new URL('./worker.js', import.meta.url)</code>을 이해하는 번들러는 Worker를 내보내고, Rollup과 esbuild는 <code>workerUrl</code>이 필요합니다. 복사한 <code>worker.js</code>는 혼자서 동작합니다(#081).</li>
+  <li>Next.js 페이지는 client component 맨 위에서 <code>opfslogd</code>를 import하므로 서버 렌더링에서도 모듈을 불러옵니다. 오류는 없고, <code>init()</code>은 hydration 뒤 브라우저에서 돕니다.</li>
+  <li>TypeScript 5.9의 <code>moduleResolution: "node"</code>는 <code>package.json</code>에 <code>types</code>를 넣기 전까지 타입을 찾지 못했습니다(<code>TS2307</code>, #084).</li>
+  <li>확인하지 않은 것: Rspack, webpack dev 서버, Parcel dev 서버, 이 번들러들과 Firefox·Safari 조합(Worker URL은 브라우저가 아니라 번들러가 정합니다).</li>
+</ul>
+</div>
+
+<h2 id="manual">8. 실기기에서 직접 확인할 것</h2>
 <p>자동화가 어렵거나 실제 기기, 긴 시간이 필요한 항목입니다(#058).</p>
 <ul>
   <li>모바일 Safari의 OPFS quota와 eviction 동작</li>
